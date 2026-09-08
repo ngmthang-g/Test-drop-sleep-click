@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cwchar>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -142,4 +143,4 @@ public:
     bool Attach(const GameClient& game,std::wstring& error){
         Close();game_=game;wchar_t mappingName[96]{};MappingName(game.pid,mappingName,_countof(mappingName));
         mapping_=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(SharedBlock),mappingName);if(!mapping_){error=L"không tạo shared memory";return false;}
-    
+        shared_=rei
