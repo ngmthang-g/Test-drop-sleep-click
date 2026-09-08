@@ -1,4 +1,6 @@
-witchToThread())YieldProcessor();}}
+,ex,ey)){err=L"thiếu swipe_start/swipe_end";return false;}RECT rc{};GetClientRect(g.hwnd,&rc);const int nsx=NormalizeCoord(sx,rc.right),nsy=NormalizeCoord(sy,rc.bottom),nex=NormalizeCoord(ex,rc.right),ney=NormalizeCoord(ey,rc.bottom);auto q16=[](int v){return(int)(((long long)std::clamp(v,0,kCoordinateScale)*65535LL+kCoordinateScale/2)/kCoordinateScale);};const int packed=((q16(nex)&0xffff)<<16)|(q16(ney)&0xffff);Response r{};return b.Call(Command::DragInternalPoint,nsx,nsy,packed,r,err,1200);}
+    bool ProbeInternalSell(BridgeClient&b,bool&found,std::wstring&err){Response r{};if(!b.Call(Command::ProbeItemSellAction,0,0,0,r,err,900))return false;found=r.value0!=0;return true;}
+    bool WaitAndClickInternalSell(BridgeClient&b,std::wstring&err){const ULONGLONG deadline=GetTickCount64()+kPopupTimeoutMs;for(;;){if(cancel_){err=L"đã hủy";return false;}Response r{};if(!b.Call(Command::ClickItemSellAction,0,0,0,r,err,900))return false;if(r.value0!=0)break;if(GetTickCount64()>=deadline){err=L"timeout chưa thấy dòng BÁN nội bộ";return false;}if(!SwitchToThread())YieldProcessor();}const ULONGLONG gone=GetTickCount64()+kGoneTimeoutMs;for(;;){bool found=false;if(!ProbeInternalSell(b,found,err))return false;if(!found)return true;if(GetTickCount64()>=gone){err=L"dòng BÁN chưa biến mất sau callback";return false;}if(!SwitchToThread())YieldProcessor();}}
     bool ResolveRoi(HWND hwnd,int&x,int&y,int&w,int&h){RECT rc{};if(!GetClientRect(hwnd,&rc))return false;const int cw=rc.right,ch=rc.bottom;x=cfg_.roiX;y=cfg_.roiY;w=cfg_.roiW;h=cfg_.roiH;if(cfg_.roiBaseW>0&&cfg_.roiBaseH>0&&(cfg_.roiBaseW!=cw||cfg_.roiBaseH!=ch)){x=ScaleCoord(x,cfg_.roiBaseW,cw);y=ScaleCoord(y,cfg_.roiBaseH,ch);if(w>0)w=ScaleCoord(w,cfg_.roiBaseW,cw);if(h>0)h=ScaleCoord(h,cfg_.roiBaseH,ch);}return true;}
     bool ScanSell(HWND hwnd,const Image&tpl,Match&m,std::wstring&err){Image frame{};if(!CaptureClient(hwnd,frame,err))return false;int x=0,y=0,w=0,h=0;ResolveRoi(hwnd,x,y,w,h);m=FindTemplate(frame,tpl,x,y,w,h,cfg_.thresholdPercent/100.0);return true;}
     bool WaitAndClickImageSell(BridgeClient&b,const GameClient&g,const Image&tpl,std::wstring&err){const ULONGLONG deadline=GetTickCount64()+kPopupTimeoutMs;for(;;){Match m{};if(!ScanSell(g.hwnd,tpl,m,err))return false;if(m.found){RECT rc{};GetClientRect(g.hwnd,&rc);const int cx=m.x+tpl.width/2,cy=m.y+tpl.height/2,nx=NormalizeCoord(cx,rc.right),ny=NormalizeCoord(cy,rc.bottom);Response r{};if(!b.Call(Command::ClickInternalPointRawTest,nx,ny,0,r,err,900))return false;break;}if(GetTickCount64()>=deadline){err=L"timeout chưa thấy ảnh BÁN";return false;}}const ULONGLONG gone=GetTickCount64()+kGoneTimeoutMs;for(;;){Match m{};if(!ScanSell(g.hwnd,tpl,m,err))return false;if(!m.found)return true;if(GetTickCount64()>=gone){err=L"ảnh BÁN chưa biến mất sau click";return false;}}}
@@ -8,9 +10,20 @@ witchToThread())YieldProcessor();}}
         Finish(cancel_?L"ĐÃ HỦY":L"DONE • TEST BÁN ĐỒ hoàn tất");}
     void Finish(const std::wstring&s){running_=false;cancel_=false;PostMessageW(hwnd_,WM_APP+10,0,reinterpret_cast<LPARAM>(new std::wstring(s)));}
     void Start(){if(running_)return;GameClient g{};if(!SelectedGame(g)){Status(L"Không có client được chọn");return;}const bool internal=IsDlgButtonChecked(hwnd_,IDC_MODE_INTERNAL)==BST_CHECKED;running_=true;cancel_=false;Status(internal?L"Đang TEST • dòng BÁN nội bộ • no fixed Sleep":L"Đang TEST • scan ảnh BÁN • no fixed Sleep");if(worker_.joinable())worker_.join();worker_=std::thread([this,g,internal]{RunTest(g,internal);});}
-    LRESULT Handle(UINT m,WPARAM w,LPARAM l){switch(m){case WM_COMMAND:if(LOWORD(w)==IDC_TEST_SELL){Start();return 0;}break;case WM_TIMER:if(w==kClientTimer){RefreshClients();return 0;}break;case WM_APP+10:{std::unique_ptr<std::wstring>s(reinterpret_cast<std::wstring*>(l));if(s)Status(*s);RefreshClients();return 0;}case WM_DESTROY:cancel_=true;KillTimer(hwnd_,kClientTimer);PostQuitMessage(0);return 0;}return DefWindowProcW(hwnd_,m,w,l);}
+    LRESULT Handle(UINT m,WPARAM w,LPARAM l){switch(m){case WM_COMMAND:if(LOWORD(w)==IDC_TEST_SELL){Start();return 0;}break;case WM_TIMER:if(w==kClientTimer){KillTimer(hwnd_,kClientTimer);RefreshClients();if(IsWindow(hwnd_))SetTimer(hwnd_,kClientTimer,1000,nullptr);return 0;}break;case WM_APP+10:{std::unique_ptr<std::wstring>s(reinterpret_cast<std::wstring*>(l));if(s)Status(*s);RefreshClients();return 0;}case WM_DESTROY:cancel_=true;KillTimer(hwnd_,kClientTimer);PostQuitMessage(0);return 0;}return DefWindowProcW(hwnd_,m,w,l);}
 };
 
 } // namespace
 
-int APIENTRY wWinMain(HINSTANCE h,HINSTANCE,LPWSTR,int){App app;g_app=&app;return app.Run(h);}
+int APIENTRY wWinMain(HINSTANCE h,HINSTANCE,LPWSTR,int){
+    try{App app;g_app=&app;return app.Run(h);}
+    catch(const std::exception& e){
+        std::string text="Startup exception: ";text+=e.what();
+        std::ofstream out(std::filesystem::path(ExeDir())/L"startup_error.txt",std::ios::binary);if(out)out<<text;
+        MessageBoxA(nullptr,text.c_str(),"ThanLongTestSell startup error",MB_OK|MB_ICONERROR);return 2;
+    }catch(...){
+        const char* text="Unknown startup exception";
+        std::ofstream out(std::filesystem::path(ExeDir())/L"startup_error.txt",std::ios::binary);if(out)out<<text;
+        MessageBoxA(nullptr,text,"ThanLongTestSell startup error",MB_OK|MB_ICONERROR);return 3;
+    }
+}
