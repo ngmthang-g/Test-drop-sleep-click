@@ -1,0 +1,159 @@
+#include <windows.h>
+#include <cstdint>
+#include <cstddef>
+#include <climits>
+#include <algorithm>
+#include <cmath>
+#include <cwctype>
+#include <cstring>
+#include <initializer_list>
+#include <string>
+#include <utility>
+#include <vector>
+#include "internal_ui_click_logic.h"
+#include "protocol.h"
+#include "unity_geometry_logic.h"
+
+using namespace cleanroute;
+using internal_ui_click_logic::DispatchPlan;
+using unity_geometry_logic::GeometryClass;
+using unity_geometry_logic::ImageSlot;
+
+namespace {
+
+struct Labels {
+    std::wstring name;
+    std::wstring text;
+    std::wstring handler;
+    std::wstring ancestors;
+    std::wstring descendants;
+};
+
+using Il2CppDomain = void;
+using Il2CppAssembly = void;
+using Il2CppImage = void;
+using Il2CppClass = void;
+using MethodInfo = void;
+using FieldInfo = void;
+using Il2CppType = void;
+using Il2CppObject = void;
+using Il2CppString = void;
+
+HANDLE g_mapping = nullptr;
+SharedBlock* g_shared = nullptr;
+
+template <typename T>
+bool Resolve(HMODULE module, const char* name, T& out) {
+    out = nullptr;
+    FARPROC p = GetProcAddress(module, name);
+    if (!p) return false;
+    static_assert(sizeof(p) == sizeof(out), "pointer-size mismatch");
+    const unsigned char* s = reinterpret_cast<const unsigned char*>(&p);
+    unsigned char* d = reinterpret_cast<unsigned char*>(&out);
+    for (std::size_t i = 0; i < sizeof(out); ++i) d[i] = s[i];
+    return out != nullptr;
+}
+
+bool Eq(const char* a, const char* b) {
+    if (!a || !b) return false;
+    while (*a && *b) { if (*a++ != *b++) return false; }
+    return *a == *b;
+}
+
+void SetText(wchar_t* out, std::size_t cap, const wchar_t* text) {
+    if (!out || cap == 0) return;
+    std::size_t i = 0;
+    if (text) while (i + 1 < cap && text[i]) { out[i] = text[i]; ++i; }
+    out[i] = 0;
+}
+
+void Append(wchar_t* out, std::size_t cap, const wchar_t* text) {
+    if (!out || !text || cap == 0) return;
+    std::size_t n = 0; while (n + 1 < cap && out[n]) ++n;
+    std::size_t i = 0; while (n + 1 < cap && text[i]) out[n++] = text[i++];
+    out[n] = 0;
+}
+
+void AppendInt(wchar_t* out, std::size_t cap, int value) {
+    wchar_t tmp[32]{}; wsprintfW(tmp, L"%d", value); Append(out, cap, tmp);
+}
+
+void AppendInt64(wchar_t* out, std::size_t cap, std::int64_t value) {
+    wchar_t tmp[48]{}; _snwprintf_s(tmp, _countof(tmp), _TRUNCATE, L"%lld", static_cast<long long>(value));
+    Append(out, cap, tmp);
+}
+
+struct Api {
+    HMODULE module = nullptr;
+    Il2CppDomain* (__cdecl* domain_get)() = nullptr;
+    const Il2CppAssembly* (__cdecl* domain_assembly_open)(Il2CppDomain*, const char*) = nullptr;
+    const Il2CppImage* (__cdecl* assembly_get_image)(const Il2CppAssembly*) = nullptr;
+    Il2CppClass* (__cdecl* class_from_name)(const Il2CppImage*, const char*, const char*) = nullptr;
+    const MethodInfo* (__cdecl* class_get_method_from_name)(Il2CppClass*, const char*, int) = nullptr;
+    Il2CppClass* (__cdecl* class_get_parent)(Il2CppClass*) = nullptr;
+    std::uint32_t (__cdecl* method_get_flags)(const MethodInfo*, std::uint32_t*) = nullptr;
+    std::uint32_t (__cdecl* method_get_param_count)(const MethodInfo*) = nullptr;
+    const Il2CppType* (__cdecl* method_get_param)(const MethodInfo*, std::uint32_t) = nullptr;
+    const Il2CppType* (__cdecl* method_get_return_type)(const MethodInfo*) = nullptr;
+    char* (__cdecl* type_get_name)(const Il2CppType*) = nullptr;
+    void (__cdecl* free_fn)(void*) = nullptr;
+    Il2CppObject* (__cdecl* runtime_invoke)(const MethodInfo*, void*, void**, void**) = nullptr;
+    void* (__cdecl* object_unbox)(Il2CppObject*) = nullptr;
+    Il2CppClass* (__cdecl* object_get_class)(Il2CppObject*) = nullptr;
+    FieldInfo* (__cdecl* class_get_field_from_name)(Il2CppClass*, const char*) = nullptr;
+    const Il2CppType* (__cdecl* field_get_type)(FieldInfo*) = nullptr;
+    void (__cdecl* field_get_value)(Il2CppObject*, FieldInfo*, void*) = nullptr;
+    Il2CppClass* (__cdecl* class_from_type)(const Il2CppType*) = nullptr;
+    bool (__cdecl* class_is_valuetype)(const Il2CppClass*) = nullptr;
+    std::int32_t (__cdecl* string_length)(Il2CppString*) = nullptr;
+    const wchar_t* (__cdecl* string_chars)(Il2CppString*) = nullptr;
+    bool (__cdecl* class_is_assignable_from)(Il2CppClass*, Il2CppClass*) = nullptr;
+    void (__cdecl* field_static_get_value)(FieldInfo*, void*) = nullptr;
+    const Il2CppImage* (__cdecl* get_corlib)() = nullptr;
+    Il2CppObject* (__cdecl* array_new)(Il2CppClass*, std::uintptr_t) = nullptr;
+    Il2CppString* (__cdecl* string_new)(const char*) = nullptr;
+    std::size_t (__cdecl* image_get_class_count)(const Il2CppImage*) = nullptr;
+    Il2CppClass* (__cdecl* image_get_class)(const Il2CppImage*, std::size_t) = nullptr;
+    const char* (__cdecl* class_get_name)(Il2CppClass*) = nullptr;
+    const MethodInfo* (__cdecl* class_get_methods)(Il2CppClass*, void**) = nullptr;
+    const char* (__cdecl* method_get_name)(const MethodInfo*) = nullptr;
+    bool uiDiscoveryExportsLoaded = false;
+    bool uiLuaExportsLoaded = false;
+
+    bool Load(wchar_t* detail, std::size_t cap) {
+        if (module) return true;
+        module = GetModuleHandleW(L"GameAssembly.dll");
+        if (!module) { SetText(detail, cap, L"GameAssembly.dll chưa sẵn sàng"); return false; }
+#define NEED(symbol) do { if (!Resolve(module, "il2cpp_" #symbol, symbol)) { SetText(detail, cap, L"Thiếu IL2CPP export bắt buộc"); return false; } } while (0)
+        NEED(domain_get); NEED(domain_assembly_open); NEED(assembly_get_image); NEED(class_from_name);
+        NEED(class_get_method_from_name); NEED(class_get_parent); NEED(method_get_flags);
+        NEED(method_get_param_count); NEED(method_get_param); NEED(method_get_return_type);
+        NEED(type_get_name); NEED(runtime_invoke); NEED(object_unbox); NEED(object_get_class);
+        NEED(class_get_field_from_name); NEED(field_get_type); NEED(field_get_value);
+        NEED(class_from_type); NEED(class_is_valuetype); NEED(string_length); NEED(string_chars);
+#undef NEED
+        if (!Resolve(module, "il2cpp_free", free_fn)) { SetText(detail, cap, L"Thiếu il2cpp_free"); return false; }
+        return true;
+    }
+
+    bool LoadUiDiscovery(wchar_t* detail, std::size_t cap) {
+        if (!Load(detail, cap)) return false;
+        if (uiDiscoveryExportsLoaded) return true;
+        if (!Resolve(module, "il2cpp_class_is_assignable_from", class_is_assignable_from)) {
+            SetText(detail, cap, L"UI discovery thiếu export class_is_assignable_from");
+            return false;
+        }
+        if (!Resolve(module, "il2cpp_field_static_get_value", field_static_get_value)) {
+            SetText(detail, cap, L"UI discovery thiếu export field_static_get_value");
+            return false;
+        }
+        // These exports are optional: known namespaces remain the fast path, while
+        // metadata enumeration lets the same verified class surface survive a namespace move.
+        (void)Resolve(module, "il2cpp_image_get_class_count", image_get_class_count);
+        (void)Resolve(module, "il2cpp_image_get_class", image_get_class);
+        (void)Resolve(module, "il2cpp_class_get_name", class_get_name);
+        (void)Resolve(module, "il2cpp_class_get_methods", class_get_methods);
+        (void)Resolve(module, "il2cpp_method_get_name", method_get_name);
+        uiDiscoveryExportsLoaded = true;
+        return true;
+    }
