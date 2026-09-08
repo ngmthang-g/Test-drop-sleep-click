@@ -1,0 +1,151 @@
+yncRelease && g_ui.inputSyncCancel &&
+        ReturnType(g_ui.inputSyncPress, "System.Void") &&
+        ReturnType(g_ui.inputSyncDrag, "System.Void") &&
+        ReturnType(g_ui.inputSyncRelease, "System.Void") &&
+        ReturnType(g_ui.inputSyncCancel, "System.Void");
+    if (!g_ui.inputSyncManager || !g_ui.unityScreen || !methodsValid ||
+        !FieldType(g_ui.inputSyncDragging, "System.Boolean")) {
+        SetText(detail, cap, L"Không resolve đúng InputSyncManager press/release/drag-state hoặc Unity Screen");
+        return false;
+    }
+    g_ui.internalPointClickReady = true;
+    return true;
+}
+
+bool BuildInputSyncScreenPoint(int normalizedX, int normalizedY, UnityVector2& point,
+                               wchar_t* detail, std::size_t cap) {
+    if (!EnsureInternalPointClick(detail, cap)) return false;
+    if (!internal_ui_click_logic::IsNormalizedCoordinate(
+            normalizedX, kCoordinateScale) ||
+        !internal_ui_click_logic::IsNormalizedCoordinate(
+            normalizedY, kCoordinateScale)) {
+        SetText(detail, cap, L"Tọa độ UI chuẩn hóa nằm ngoài client");
+        return false;
+    }
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    if (!StaticScalar(g_ui.unityScreen, "get_width", width, detail, cap) || width <= 0 ||
+        !StaticScalar(g_ui.unityScreen, "get_height", height, detail, cap) || height <= 0) {
+        SetText(detail, cap, L"Không đọc được Unity Screen.width/height cho click nội bộ");
+        return false;
+    }
+    point.x = static_cast<float>(static_cast<double>(normalizedX) * width /
+                                 kCoordinateScale);
+    const double topY = static_cast<double>(normalizedY) * height /
+                        kCoordinateScale;
+    point.y = static_cast<float>(height - 1.0 - topY);
+    return true;
+}
+
+void CancelOwnedInputSyncDrag(Il2CppObject* manager) {
+    if (!manager || !g_ui.inputSyncCancel) return;
+    wchar_t ignored[128]{};
+    (void)InvokeVoid(g_ui.inputSyncCancel, manager, nullptr, ignored, _countof(ignored));
+}
+
+bool InvokeInternalPointClick(int normalizedX, int normalizedY,
+                          wchar_t* detail, std::size_t cap,
+                          bool rawMacro = false) {
+    UnityVector2 point{};
+    if (!BuildInputSyncScreenPoint(normalizedX, normalizedY, point, detail, cap)) return false;
+
+    Il2CppObject* manager = nullptr;
+    if (!InvokeObject(g_ui.inputSyncGetInstance, nullptr, manager, detail, cap) || !manager) {
+        SetText(detail, cap, L"InputSyncManager.Instance chưa sẵn sàng");
+        return false;
+    }
+
+    bool dragging = false;
+    if (!rawMacro) {
+        if (!ReadInputSyncDragging(manager, dragging, detail, cap)) return false;
+        if (dragging) {
+            SetText(detail, cap, L"InputSyncManager đang giữ UI drag; không chồng click nội bộ");
+            return false;
+        }
+    } else {
+        // Raw trade macro: stale drag evidence is cleanup-only, not a UI gate.
+        wchar_t ignored[128]{};
+        if (ReadInputSyncDragging(manager, dragging, ignored, _countof(ignored)) && dragging)
+            CancelOwnedInputSyncDrag(manager);
+    }
+
+    std::int32_t button = internal_ui_click_logic::kLeftButton;
+    void* pressArgs[] = {&button, &point};
+    if (!InvokeVoid(g_ui.inputSyncPress, manager, pressArgs, detail, cap)) {
+        bool ownsDrag = false;
+        if (ReadInputSyncDragging(manager, ownsDrag, detail, cap) && ownsDrag)
+            CancelOwnedInputSyncDrag(manager);
+        SetText(detail, cap, L"InputSyncManager.TryClickUI ném exception");
+        return false;
+    }
+
+    if (!rawMacro) {
+        if (!ReadInputSyncDragging(manager, dragging, detail, cap)) return false;
+        if (!dragging) {
+            SetText(detail, cap, L"InputSyncManager raycast không bắt được UI tại tọa độ đã gán");
+            return false;
+        }
+    }
+
+    void* releaseArgs[] = {&point};
+    if (!InvokeVoid(g_ui.inputSyncRelease, manager, releaseArgs, detail, cap)) {
+        CancelOwnedInputSyncDrag(manager);
+        SetText(detail, cap, L"InputSyncManager.EndUIDrag ném exception; đã hủy drag nội bộ");
+        return false;
+    }
+
+    if (!rawMacro) {
+        if (!ReadInputSyncDragging(manager, dragging, detail, cap)) return false;
+        if (dragging) {
+            CancelOwnedInputSyncDrag(manager);
+            SetText(detail, cap, L"InputSyncManager chưa nhả UI drag; đã hủy và dừng fail-closed");
+            return false;
+        }
+    } else {
+        // Best-effort cleanup only. Raycast/drag-state evidence never decides
+        // whether the user's saved trade macro advances to Delay/Repeat/next row.
+        wchar_t ignored[128]{};
+        if (ReadInputSyncDragging(manager, dragging, ignored, _countof(ignored)) && dragging)
+            CancelOwnedInputSyncDrag(manager);
+    }
+    return true;
+}
+
+bool ClickInternalPoint(int normalizedX, int normalizedY, bool rawMacro, Response& response,
+                        wchar_t* detail, std::size_t cap) {
+    Classes c{};
+    if (!ResolveClasses(c, detail, cap)) return false;
+    if (!InvokeInternalPointClick(normalizedX, normalizedY, detail, cap, rawMacro)) return false;
+    response.resultCode = static_cast<std::int32_t>(ActionResult::ActionInvoked);
+    SetText(detail, cap, rawMacro
+        ? L"RAW MACRO InputSync: TryClickUI → EndUIDrag; không gate theo raycast/_uiDragging"
+        : L"InputSync click nội bộ hoàn chỉnh: TryClickUI → EndUIDrag");
+    return true;
+}
+
+bool ClickInternalPointRawTest(int normalizedX, int normalizedY, Response& response,
+                               wchar_t* detail, std::size_t cap) {
+    if (!InvokeInternalPointClick(normalizedX, normalizedY, detail, cap, true)) return false;
+    response.resultCode = static_cast<std::int32_t>(ActionResult::ActionInvoked);
+    SetText(detail, cap, L"RAW SCAN InputSync PASS: TryClickUI → EndUIDrag • không SafeForAction");
+    return true;
+}
+
+
+bool InvokeInternalPointDrag(int startNormalizedX, int startNormalizedY,
+                             int endNormalizedX, int endNormalizedY,
+                             wchar_t* detail, std::size_t cap) {
+    UnityVector2 start{}, end{};
+    if (!BuildInputSyncScreenPoint(startNormalizedX, startNormalizedY, start, detail, cap) ||
+        !BuildInputSyncScreenPoint(endNormalizedX, endNormalizedY, end, detail, cap)) return false;
+    Il2CppObject* manager = nullptr;
+    if (!InvokeObject(g_ui.inputSyncGetInstance, nullptr, manager, detail, cap) || !manager) {
+        SetText(detail, cap, L"InputSyncManager.Instance chưa sẵn sàng cho drag"); return false;
+    }
+    bool dragging = false;
+    if (!ReadInputSyncDragging(manager, dragging, detail, cap)) return false;
+    if (dragging) { CancelOwnedInputSyncDrag(manager); SetText(detail, cap, L"InputSyncManager có drag cũ; đã cancel"); return false; }
+    std::int32_t button = internal_ui_click_logic::kLeftButton;
+    void* pressArgs[] = {&button, &start};
+    if (!InvokeVoid(g_ui.inputSyncPress, manager, pressArgs, detail, cap)) {
+        CancelOwnedInpu
