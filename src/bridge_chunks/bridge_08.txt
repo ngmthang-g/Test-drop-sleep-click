@@ -1,0 +1,155 @@
+tTransform = ResolveGeometryClass(GeometryClass::RectTransform);
+    g_ui.unityTransform = ResolveGeometryClass(GeometryClass::Transform);
+    g_ui.unityGameObject = ResolveGeometryClass(GeometryClass::GameObject);
+    g_ui.rectTransformUtility = ResolveGeometryClass(GeometryClass::RectTransformUtility);
+    g_ui.unityScreen = ResolveGeometryClass(GeometryClass::Screen);
+    const std::pair<GeometryClass, Il2CppClass*> required[] = {
+        {GeometryClass::RectTransform, g_ui.unityRectTransform},
+        {GeometryClass::Transform, g_ui.unityTransform},
+        {GeometryClass::GameObject, g_ui.unityGameObject},
+        {GeometryClass::RectTransformUtility, g_ui.rectTransformUtility},
+        {GeometryClass::Screen, g_ui.unityScreen},
+    };
+    bool missing = false;
+    for (const auto& item : required) {
+        if (item.second) continue;
+        if (!missing) SetText(detail, cap, L"Geometry thiếu class: ");
+        else Append(detail, cap, L", ");
+        Append(detail, cap, unity_geometry_logic::ClassLabel(item.first));
+        missing = true;
+    }
+    if (missing) {
+        AppendGeometryAvailability(detail, cap);
+        return false;
+    }
+    g_ui.geometryReady = true;
+    return true;
+}
+
+bool StartsWith(const char* value, const char* prefix) {
+    if (!value || !prefix) return false;
+    while (*prefix) {
+        if (*value++ != *prefix++) return false;
+    }
+    return true;
+}
+
+bool AssignableObject(Il2CppClass* base, Il2CppObject* object) {
+    if (!base || !object) return false;
+    Il2CppClass* actual = g_api.object_get_class(object);
+    return actual && g_api.class_is_assignable_from(base, actual);
+}
+
+bool NormalizeRectTransformObject(Il2CppObject* candidate, Il2CppObject*& rectTransform) {
+    rectTransform = nullptr;
+    if (!candidate) return false;
+    if (AssignableObject(g_ui.unityRectTransform, candidate)) {
+        rectTransform = candidate;
+        return true;
+    }
+    if (!AssignableObject(g_ui.unityGameObject, candidate)) return false;
+    Il2CppClass* actual = g_api.object_get_class(candidate);
+    Il2CppObject* transform = nullptr;
+    wchar_t ignored[128]{};
+    const MethodInfo* getter = actual ? FindMethod(actual, "get_transform", 0) : nullptr;
+    if (!getter || !InvokeObject(getter, candidate, transform, ignored, _countof(ignored)) ||
+        !AssignableObject(g_ui.unityRectTransform, transform)) return false;
+    rectTransform = transform;
+    return true;
+}
+
+bool GetterMayExposeRectTransform(const MethodInfo* method) {
+    if (!method || StaticMethod(method) || g_api.method_get_param_count(method) != 0) return false;
+    const Il2CppType* returnType = g_api.method_get_return_type(method);
+    Il2CppClass* returnClass = returnType ? g_api.class_from_type(returnType) : nullptr;
+    return returnClass &&
+        (g_api.class_is_assignable_from(g_ui.unityRectTransform, returnClass) ||
+         g_api.class_is_assignable_from(g_ui.unityTransform, returnClass) ||
+         g_api.class_is_assignable_from(g_ui.unityGameObject, returnClass));
+}
+
+bool ResolveRectTransform(Il2CppObject* object, Il2CppClass* klass,
+                          Il2CppObject*& rectTransform) {
+    rectTransform = nullptr;
+    if (!object || !klass) return false;
+    if (NormalizeRectTransformObject(object, rectTransform)) return true;
+
+    if (g_api.class_get_methods && g_api.method_get_name) {
+        for (Il2CppClass* current = klass; current; current = g_api.class_get_parent(current)) {
+            void* iterator = nullptr;
+            int inspected = 0;
+            while (const MethodInfo* method = g_api.class_get_methods(current, &iterator)) {
+                if (++inspected > 512) break;
+                const char* name = g_api.method_get_name(method);
+                if (!StartsWith(name, "get_") || !GetterMayExposeRectTransform(method)) continue;
+                Il2CppObject* candidate = nullptr;
+                wchar_t ignored[128]{};
+                if (InvokeObject(method, object, candidate, ignored, _countof(ignored)) &&
+                    NormalizeRectTransformObject(candidate, rectTransform)) return true;
+            }
+        }
+    }
+
+    // Named fallbacks keep the feature usable if method enumeration exports are
+    // stripped while still invoking only getters with a validated Unity return type.
+    const char* getters[] = {
+        "get_RectTransform", "get_CoreRectTransform", "get_Transform",
+        "get_CoreTransform", "get_GameObject", "get_CoreGameObject"
+    };
+    for (const char* name : getters) {
+        const MethodInfo* method = FindMethod(klass, name, 0);
+        if (!GetterMayExposeRectTransform(method)) continue;
+        Il2CppObject* candidate = nullptr;
+        wchar_t ignored[128]{};
+        if (InvokeObject(method, object, candidate, ignored, _countof(ignored)) &&
+            NormalizeRectTransformObject(candidate, rectTransform)) return true;
+    }
+    return false;
+}
+
+struct UnityVector2 { float x = 0.0f; float y = 0.0f; };
+struct UnityRectValue { float x = 0.0f; float y = 0.0f; float width = 0.0f; float height = 0.0f; };
+
+bool ReadInputSyncDragging(Il2CppObject* manager, bool& dragging,
+                           wchar_t* detail, std::size_t cap) {
+    dragging = false;
+    if (!manager || !g_ui.inputSyncDragging) {
+        SetText(detail, cap, L"InputSyncManager._uiDragging chưa resolve");
+        return false;
+    }
+    std::uint8_t value = 0;
+    g_api.field_get_value(manager, g_ui.inputSyncDragging, &value);
+    dragging = value != 0;
+    return true;
+}
+
+bool EnsureInternalPointClick(wchar_t* detail, std::size_t cap) {
+    if (g_ui.internalPointClickReady) return true;
+    if (!g_api.Load(detail, cap)) return false;
+    if (!g_ui.image) g_ui.image = Image();
+    if (!g_ui.image) {
+        SetText(detail, cap, L"Click nội bộ: không mở được Assembly-CSharp");
+        return false;
+    }
+
+    g_ui.inputSyncManager = g_api.class_from_name(g_ui.image, "", "InputSyncManager");
+    OpenUnityImages();
+    if (!g_ui.unityScreen) g_ui.unityScreen = ResolveGeometryClass(GeometryClass::Screen);
+
+    constexpr auto plan = DispatchPlan();
+    if (g_ui.inputSyncManager) {
+        g_ui.inputSyncGetInstance = ExactMethod(g_ui.inputSyncManager, "get_Instance", 0, true);
+        g_ui.inputSyncPress = ExactMethod(
+            g_ui.inputSyncManager, plan[0].methodName, plan[0].parameterCount, false,
+            "System.Int32", "UnityEngine.Vector2");
+        g_ui.inputSyncDrag = ExactMethod(
+            g_ui.inputSyncManager, "UpdateUIDrag", 1, false, "UnityEngine.Vector2");
+        g_ui.inputSyncRelease = ExactMethod(
+            g_ui.inputSyncManager, plan[1].methodName, plan[1].parameterCount, false,
+            "UnityEngine.Vector2");
+        g_ui.inputSyncCancel = ExactMethod(g_ui.inputSyncManager, "CancelUIDragState", 0, false);
+        g_ui.inputSyncDragging = FindField(g_ui.inputSyncManager, "_uiDragging");
+    }
+
+    const bool methodsValid = g_ui.inputSyncGetInstance && g_ui.inputSyncPress &&
+        g_ui.inputSyncDrag && g_ui.inputS
