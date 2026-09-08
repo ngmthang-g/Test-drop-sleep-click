@@ -1,4 +1,4 @@
-ve(module, "il2cpp_image_get_class", image_get_class);
+pp_image_get_class", image_get_class);
         (void)Resolve(module, "il2cpp_class_get_name", class_get_name);
         (void)Resolve(module, "il2cpp_class_get_methods", class_get_methods);
         (void)Resolve(module, "il2cpp_method_get_name", method_get_name);
@@ -158,4 +158,4 @@ bool InvokeScalar(const MethodInfo* method, void* instance, std::int64_t& out,
     return InvokeScalarArgs(method, instance, nullptr, out, detail, cap);
 }
 
-bool ScalarGetter(Il
+bool ScalarGetter(Il2CppClass* klass, const char* name, void* 
