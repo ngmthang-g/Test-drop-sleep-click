@@ -7,24 +7,45 @@ endif()
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "ThanLongTestSell must be built x64")
 endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# The bridge is split only so the clean test source stays easy to transport through GitHub.
-# CMake concatenates the parts byte-for-byte before compilation; runtime behavior is unchanged.
+# Transport-only split. CMake joins each source byte-for-byte before compiling.
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GENERATED_DIR}")
+
 set(GENERATED_BRIDGE "${GENERATED_DIR}/bridge.cpp")
 file(WRITE "${GENERATED_BRIDGE}" "")
 foreach(PART
-    src/bridge_parts/bridge_01.txt
-    src/bridge_parts/bridge_02.txt
-    src/bridge_parts/bridge_03.txt
-    src/bridge_parts/bridge_04.txt
-    src/bridge_parts/bridge_05.txt)
+    src/bridge_chunks/bridge_01.txt
+    src/bridge_chunks/bridge_02.txt
+    src/bridge_chunks/bridge_03.txt
+    src/bridge_chunks/bridge_04.txt
+    src/bridge_chunks/bridge_05.txt
+    src/bridge_chunks/bridge_06.txt
+    src/bridge_chunks/bridge_07.txt
+    src/bridge_chunks/bridge_08.txt
+    src/bridge_chunks/bridge_09.txt
+    src/bridge_chunks/bridge_10.txt
+    src/bridge_chunks/bridge_11.txt
+    src/bridge_chunks/bridge_12.txt
+    src/bridge_chunks/bridge_13.txt)
     file(READ "${CMAKE_SOURCE_DIR}/${PART}" PART_TEXT)
     file(APPEND "${GENERATED_BRIDGE}" "${PART_TEXT}")
+endforeach()
+
+set(GENERATED_CONTROLLER "${GENERATED_DIR}/controller.cpp")
+file(WRITE "${GENERATED_CONTROLLER}" "")
+foreach(PART
+    src/controller_chunks/controller_01.txt
+    src/controller_chunks/controller_02.txt
+    src/controller_chunks/controller_03.txt
+    src/controller_chunks/controller_04.txt)
+    file(READ "${CMAKE_SOURCE_DIR}/${PART}" PART_TEXT)
+    file(APPEND "${GENERATED_CONTROLLER}" "${PART_TEXT}")
 endforeach()
 
 add_library(ThanLongTestSellBridge SHARED "${GENERATED_BRIDGE}")
@@ -32,7 +53,7 @@ target_include_directories(ThanLongTestSellBridge PRIVATE src)
 target_compile_definitions(ThanLongTestSellBridge PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(ThanLongTestSellBridge PRIVATE user32 kernel32)
 
-add_executable(ThanLongTestSell WIN32 src/controller.cpp)
+add_executable(ThanLongTestSell WIN32 "${GENERATED_CONTROLLER}")
 target_include_directories(ThanLongTestSell PRIVATE src)
 target_compile_definitions(ThanLongTestSell PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_link_libraries(ThanLongTestSell PRIVATE comctl32 user32 kernel32 gdi32 windowscodecs ole32)
