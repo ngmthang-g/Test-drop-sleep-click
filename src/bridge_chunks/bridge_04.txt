@@ -1,0 +1,139 @@
+;
+        if (g_ui.uiObject && g_ui.button && g_ui.toggle && g_ui.rect && g_ui.executor) return;
+    }
+}
+
+Il2CppClass* FindExecutorClass(const Il2CppImage* image) {
+    if (!image) return nullptr;
+    const char* namespaces[] = {
+        "FGStudio.LuaSystem", "FGStudio.LuaSystem.Base", "FGStudio.LuaSystem.GUI",
+        "FGStudio.Engine.Utilities", ""
+    };
+    for (const char* nameSpace : namespaces) {
+        Il2CppClass* klass = g_api.class_from_name(image, nameSpace, "MonoBehaviourExecutor");
+        if (IsExecutorClass(klass)) return klass;
+    }
+    if (!g_api.image_get_class_count || !g_api.image_get_class || !g_api.class_get_name)
+        return nullptr;
+    const std::size_t count = g_api.image_get_class_count(image);
+    if (count == 0 || count > 65536) return nullptr;
+    for (std::size_t i = 0; i < count; ++i) {
+        Il2CppClass* klass = g_api.image_get_class(image, i);
+        if (klass && Eq(g_api.class_get_name(klass), "MonoBehaviourExecutor") &&
+            IsExecutorClass(klass)) return klass;
+    }
+    return nullptr;
+}
+
+void AppendMissing(wchar_t* detail, std::size_t cap, const wchar_t* component) {
+    if (!detail[0]) SetText(detail, cap, L"Thiếu component:");
+    Append(detail, cap, L" ");
+    Append(detail, cap, component);
+}
+
+bool EnsureUiDiscovery(wchar_t* detail, std::size_t cap) {
+    if (g_ui.discoveryReady) return true;
+    if (!g_api.LoadUiDiscovery(detail, cap)) return false;
+    g_ui.image = Image();
+    if (!g_ui.image) { SetText(detail, cap, L"UI discovery: không mở được Assembly-CSharp"); return false; }
+    g_ui.uiObject = g_api.class_from_name(g_ui.image, "FGStudio.LuaSystem.Base", "UIObject");
+    g_ui.button = g_api.class_from_name(g_ui.image, "FGStudio.LuaSystem.GUI", "UIButton");
+    g_ui.toggle = g_api.class_from_name(g_ui.image, "FGStudio.LuaSystem.GUI", "UIToggle");
+    g_ui.rect = g_api.class_from_name(g_ui.image, "FGStudio.LuaSystem.GUI", "UIRectTransform");
+    // A matching name is not enough. Drop only the invalid capability, then let the
+    // metadata fallback find a same-named class with the required surface elsewhere.
+    if (g_ui.uiObject && !IsUiObjectClass(g_ui.uiObject)) g_ui.uiObject = nullptr;
+    if (g_ui.button && !IsButtonClass(g_ui.button)) g_ui.button = nullptr;
+    if (g_ui.toggle && !IsToggleClass(g_ui.toggle)) g_ui.toggle = nullptr;
+    if (g_ui.rect && !IsRectClass(g_ui.rect)) g_ui.rect = nullptr;
+    FindUiClassesByMetadata(g_ui.image);
+    g_ui.instances = g_ui.uiObject ? FindField(g_ui.uiObject, "instances") : nullptr;
+    const bool anyControlClass = g_ui.button || g_ui.toggle || g_ui.rect;
+    if (!g_ui.uiObject || !g_ui.instances || !anyControlClass) {
+        detail[0] = 0;
+        if (!g_ui.uiObject) AppendMissing(detail, cap, L"UIObject(validated)");
+        if (!g_ui.instances) AppendMissing(detail, cap, L"UIObject.instances");
+        if (!anyControlClass) AppendMissing(detail, cap, L"mọi control class Button/Toggle/Rect(validated)");
+        return false;
+    }
+    g_ui.discoveryReady = true;
+    return true;
+}
+
+bool EnsureUiLua(bool requireGuiApi, wchar_t* detail, std::size_t cap) {
+    if (g_ui.luaReady && (!requireGuiApi || g_ui.guiApi)) return true;
+    if (!EnsureUiDiscovery(detail, cap) || !g_api.LoadUiLua(detail, cap)) return false;
+    if (!g_ui.executor) g_ui.executor = FindExecutorClass(g_ui.image);
+    if (!g_ui.guiApi)
+        g_ui.guiApi = g_api.class_from_name(g_ui.image, "FGStudio.LuaSystem.API", "LuaSystemAPI_GUI");
+    if (!g_ui.systemObject) {
+        const Il2CppImage* corlib = g_api.get_corlib();
+        g_ui.systemObject = corlib ? g_api.class_from_name(corlib, "System", "Object") : nullptr;
+    }
+    if (!g_ui.executor || !g_ui.systemObject || (requireGuiApi && !g_ui.guiApi)) {
+        detail[0] = 0;
+        if (!g_ui.executor) AppendMissing(detail, cap, L"MonoBehaviourExecutor(any namespace)");
+        if (!g_ui.systemObject) AppendMissing(detail, cap, L"System.Object");
+        if (requireGuiApi && !g_ui.guiApi) AppendMissing(detail, cap, L"LuaSystemAPI_GUI");
+        return false;
+    }
+    g_ui.luaReady = true;
+    return true;
+}
+
+bool ReadManagedPointerArray(Il2CppObject* array, std::vector<Il2CppObject*>& values,
+                             std::size_t hardLimit) {
+    values.clear();
+    std::uintptr_t length = 0;
+    if (!array || !ReadLocal(array, 0x18, length) || length > hardLimit) return false;
+    values.reserve(static_cast<std::size_t>(length));
+    for (std::uintptr_t i = 0; i < length; ++i) {
+        Il2CppObject* value = nullptr;
+        if (!ReadLocal(array, 0x20 + static_cast<std::size_t>(i) * sizeof(void*), value)) return false;
+        if (value) values.push_back(value);
+    }
+    return true;
+}
+
+
+bool ReadScalarField64(Il2CppObject* object, Il2CppClass* klass, const char* name, std::int64_t& out) {
+    out = 0;
+    FieldInfo* field = FindField(klass, name);
+    if (!field) return false;
+    const Il2CppType* type = g_api.field_get_type(field);
+    char* typeName = type ? g_api.type_get_name(type) : nullptr;
+    if (!typeName) return false;
+    bool ok = true;
+    if (Eq(typeName, "System.Boolean")) { std::uint8_t v = 0; g_api.field_get_value(object, field, &v); out = v ? 1 : 0; }
+    else if (Eq(typeName, "System.Int32")) { std::int32_t v = 0; g_api.field_get_value(object, field, &v); out = v; }
+    else if (Eq(typeName, "System.UInt32")) { std::uint32_t v = 0; g_api.field_get_value(object, field, &v); out = v; }
+    else if (Eq(typeName, "System.Int64")) { std::int64_t v = 0; g_api.field_get_value(object, field, &v); out = v; }
+    else if (Eq(typeName, "System.UInt64")) {
+        std::uint64_t v = 0; g_api.field_get_value(object, field, &v);
+        if (v > static_cast<std::uint64_t>(INT64_MAX)) ok = false; else out = static_cast<std::int64_t>(v);
+    } else ok = false;
+    g_api.free_fn(typeName);
+    return ok;
+}
+
+bool ReadScalarMember64(Il2CppObject* object, Il2CppClass* klass, const char* name, std::int64_t& out) {
+    wchar_t ignored[96]{};
+    std::string getter = std::string("get_") + name;
+    if (ScalarGetter64(klass, getter.c_str(), object, out, ignored, _countof(ignored))) return true;
+    return ReadScalarField64(object, klass, name, out);
+}
+
+bool InvokeEnum32NameArgs(const MethodInfo* method, void* instance, void** args,
+                          std::int32_t& value, wchar_t* name, std::size_t nameCap,
+                          wchar_t* detail, std::size_t cap) {
+    value = 0;
+    if (name && nameCap) name[0] = 0;
+    if (!method) { SetText(detail, cap, L"Enum method chưa resolve"); return false; }
+    void* exc = nullptr;
+    Il2CppObject* boxed = g_api.runtime_invoke(method, instance, args, &exc);
+    if (exc || !boxed) { SetText(detail, cap, L"Enum getter lỗi/null"); return false; }
+    void* raw = g_api.object_unbox(boxed);
+    if (!raw) { SetText(detail, cap, L"Không unbox enum"); return false; }
+    value = *reinterpret_cast<const std::int32_t*>(raw);
+    if (name && nameCap) {
+        Il2CppClass* klass = 
