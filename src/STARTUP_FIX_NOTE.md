@@ -1,0 +1,1 @@
+Startup hotfix: show UI before client/module scan; startup exceptions now surface via MessageBox and startup_error.txt. This marker is temporary and documents the runtime hotfix commit.
