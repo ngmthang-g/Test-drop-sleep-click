@@ -1,0 +1,145 @@
+#include <windows.h>
+#include <commctrl.h>
+#include <tlhelp32.h>
+#include <wincodec.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cwchar>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+#include "bag_filter_v2_logic.h"
+#include "equip_point_db.h"
+#include "protocol.h"
+
+using namespace cleanroute;
+
+namespace {
+
+constexpr wchar_t kTitle[] = L"TEST BÁN ĐỒ • DROP SLEEP";
+constexpr wchar_t kGameModule[] = L"GameAssembly.dll";
+constexpr UINT_PTR kClientTimer = 1;
+constexpr int IDC_CLIENTS = 100;
+constexpr int IDC_MODE_IMAGE = 101;
+constexpr int IDC_MODE_INTERNAL = 102;
+constexpr int IDC_TEST_SELL = 103;
+constexpr int IDC_STATUS = 104;
+constexpr int IDC_LOG = 105;
+constexpr int kCoordinateScale = 1000000;
+constexpr ULONGLONG kPopupTimeoutMs = 1200;
+constexpr ULONGLONG kGoneTimeoutMs = 1200;
+constexpr UINT kPwRenderFullContent = 0x00000002;
+
+struct GameClient { DWORD pid=0; DWORD threadId=0; HWND hwnd=nullptr; std::wstring title; };
+struct ClickStep { int x=0,y=0,baseW=0,baseH=0; bool valid=false; };
+struct ScanConfig {
+    std::array<ClickStep,42> steps{};
+    ClickStep swipeStart{};
+    ClickStep swipeEnd{};
+    std::wstring sellImagePath;
+    int roiX=0,roiY=0,roiW=0,roiH=0,roiBaseW=0,roiBaseH=0;
+    int thresholdPercent=88;
+};
+struct Image { int width=0,height=0; std::vector<std::uint8_t> bgra{}; };
+struct Match { bool found=false; int x=0,y=0; double score=-1.0; };
+
+std::wstring ExeDir() {
+    wchar_t path[MAX_PATH*4]{}; GetModuleFileNameW(nullptr,path,_countof(path));
+    std::filesystem::path p(path); return p.parent_path().wstring();
+}
+
+std::string ReadAllBytes(const std::wstring& path) {
+    std::ifstream in(std::filesystem::path(path),std::ios::binary);
+    if(!in) return {};
+    std::ostringstream out; out<<in.rdbuf(); return out.str();
+}
+
+int ScaleCoord(int value,int fromExtent,int toExtent) {
+    if(fromExtent<=0||toExtent<=0) return value;
+    return static_cast<int>((static_cast<long long>(value)*toExtent+fromExtent/2)/fromExtent);
+}
+
+bool ResolvePoint(const ClickStep& p,HWND hwnd,int& x,int& y) {
+    if(!p.valid) return false;
+    RECT rc{}; if(!GetClientRect(hwnd,&rc)) return false;
+    const int w=rc.right-rc.left,h=rc.bottom-rc.top; if(w<=0||h<=0) return false;
+    x=p.x; y=p.y;
+    if(p.baseW>0&&p.baseH>0&&(p.baseW!=w||p.baseH!=h)) { x=ScaleCoord(x,p.baseW,w); y=ScaleCoord(y,p.baseH,h); }
+    x=std::clamp(x,0,w-1); y=std::clamp(y,0,h-1); return true;
+}
+
+int NormalizeCoord(int v,int extent) {
+    if(extent<=0) return -1;
+    return static_cast<int>((static_cast<long long>(std::clamp(v,0,extent-1))*kCoordinateScale)/extent);
+}
+
+bool ParseStep(const std::string& text,ClickStep& p) {
+    std::stringstream ss(text); std::string item; std::array<int,6> v{}; int i=0;
+    while(std::getline(ss,item,',')&&i<6){try{v[static_cast<std::size_t>(i++)]=std::stoi(item);}catch(...){return false;}}
+    if(i!=6)return false;
+    p={v[0],v[1],v[2],v[3],v[5]!=0}; return true;
+}
+
+bool LoadTlScan(const std::wstring& path,ScanConfig& c,std::wstring& detail) {
+    std::ifstream in(std::filesystem::path(path),std::ios::binary); if(!in){detail=L"không thấy "+path;return false;}
+    std::string line; if(!std::getline(in,line)||(line!="TL_SCAN_V5"&&line!="TL_SCAN_AUTO_V1"&&line!="TL_SCAN_AUTO_V2")){detail=L"file .tlscan không đúng TL_SCAN_V5/TL_SCAN_AUTO";return false;}
+    int loaded=0;
+    while(std::getline(in,line)){
+        if(!line.empty()&&line.back()=='\r')line.pop_back(); const auto eq=line.find('='); if(eq==std::string::npos)continue;
+        const std::string key=line.substr(0,eq),val=line.substr(eq+1);
+        if(key=="swipe_start")ParseStep(val,c.swipeStart);
+        else if(key=="swipe_end")ParseStep(val,c.swipeEnd);
+        else if(key.rfind("step",0)==0&&key!="step_count"){
+            try{const int idx=std::stoi(key.substr(4)); if(idx>=0&&idx<42&&ParseStep(val,c.steps[static_cast<std::size_t>(idx)]))++loaded;}catch(...){}
+        }
+    }
+    if(loaded<42){detail=L".tlscan chỉ có "+std::to_wstring(loaded)+L"/42 tọa hợp lệ";return false;}
+    if(!c.swipeStart.valid||!c.swipeEnd.valid){detail=L".tlscan thiếu swipe_start/swipe_end";return false;}
+    detail=L"đã nạp nguyên 42 tọa + swipe từ TL_SCAN_V5"; return true;
+}
+
+void LoadSellIni(ScanConfig& c) {
+    const std::wstring ini=ExeDir()+L"\\test_sell.ini";
+    wchar_t image[MAX_PATH*4]{};
+    GetPrivateProfileStringW(L"SellImage",L"Template",L"sell.png",image,_countof(image),ini.c_str());
+    std::filesystem::path p(image); if(p.is_relative())p=std::filesystem::path(ExeDir())/p; c.sellImagePath=p.wstring();
+    c.roiX=GetPrivateProfileIntW(L"SellImage",L"RoiX",0,ini.c_str());
+    c.roiY=GetPrivateProfileIntW(L"SellImage",L"RoiY",0,ini.c_str());
+    c.roiW=GetPrivateProfileIntW(L"SellImage",L"RoiW",0,ini.c_str());
+    c.roiH=GetPrivateProfileIntW(L"SellImage",L"RoiH",0,ini.c_str());
+    c.roiBaseW=GetPrivateProfileIntW(L"SellImage",L"BaseW",0,ini.c_str());
+    c.roiBaseH=GetPrivateProfileIntW(L"SellImage",L"BaseH",0,ini.c_str());
+    c.thresholdPercent=std::clamp(GetPrivateProfileIntW(L"SellImage",L"Threshold",88,ini.c_str()),1,100);
+}
+
+bool HasModule(DWORD pid,const wchar_t* name) {
+    HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid); if(snap==INVALID_HANDLE_VALUE)return false;
+    MODULEENTRY32W e{};e.dwSize=sizeof(e);bool found=false;
+    if(Module32FirstW(snap,&e)){do{if(_wcsicmp(e.szModule,name)==0){found=true;break;}}while(Module32NextW(snap,&e));}
+    CloseHandle(snap); return found;
+}
+BOOL CALLBACK EnumGameWindows(HWND hwnd,LPARAM param) {
+    if(!IsWindowVisible(hwnd)||GetWindowTextLengthW(hwnd)<=0)return TRUE;
+    DWORD pid=0;DWORD tid=GetWindowThreadProcessId(hwnd,&pid);if(!pid||!tid||!HasModule(pid,kGameModule))return TRUE;
+    auto* out=reinterpret_cast<std::vector<GameClient>*>(param);for(const auto& g:*out)if(g.pid==pid)return TRUE;
+    wchar_t title[512]{};GetWindowTextW(hwnd,title,_countof(title));out->push_back({pid,tid,hwnd,title});return TRUE;
+}
+std::vector<GameClient> FindClients(){std::vector<GameClient> out;EnumWindows(EnumGameWindows,reinterpret_cast<LPARAM>(&out));std::sort(out.begin(),out.end(),[](auto&a,auto&b){return a.pid<b.pid;});return out;}
+
+template<class T> bool ResolveProc(HMODULE module,const char* name,T& out){FARPROC p=GetProcAddress(module,name);if(!p)return false;static_assert(sizeof(p)==sizeof(out));std::memcpy(&out,&p,sizeof(out));return out!=nullptr;}
+
+class BridgeClient {
+public:
+    ~BridgeClient(){Close();}
+    bool Attach(const GameClient& game,std::wstring& error){
+        Close();game_=game;wchar_t mappingName[96]{};MappingName(game.pid,mappingName,_countof(mappingName));
+        mapping_=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(SharedBlock),mappingName);if(!mapping_){error=L"không tạo shared memory";return false;}
+    
