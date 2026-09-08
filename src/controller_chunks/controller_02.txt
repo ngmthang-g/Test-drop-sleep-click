@@ -1,4 +1,4 @@
-     shared_=reinterpret_cast<SharedBlock*>(MapViewOfFile(mapping_,FILE_MAP_ALL_ACCESS,0,0,sizeof(SharedBlock)));if(!shared_){error=L"không map shared memory";Close();return false;}
+nterpret_cast<SharedBlock*>(MapViewOfFile(mapping_,FILE_MAP_ALL_ACCESS,0,0,sizeof(SharedBlock)));if(!shared_){error=L"không map shared memory";Close();return false;}
         ZeroMemory(shared_,sizeof(*shared_));shared_->magic=kMagic;shared_->protocolVersion=kProtocolVersion;shared_->targetPid=game.pid;shared_->targetWindowThreadId=game.threadId;
         const std::wstring dll=ExeDir()+L"\\ThanLongTestSellBridge.dll";localDll_=LoadLibraryW(dll.c_str());if(!localDll_){error=L"thiếu/không load được ThanLongTestSellBridge.dll";Close();return false;}
         HOOKPROC proc=nullptr;if(!ResolveProc(localDll_,"TlcGetMessageHook",proc)){error=L"Bridge thiếu TlcGetMessageHook";Close();return false;}
@@ -47,6 +47,4 @@ App* g_app=nullptr;
 
 class App {
 public:
-    int Run(HINSTANCE inst){inst_=inst;INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTestSellWnd";RegisterClassExW(&wc);hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,790,600,nullptr,nullptr,inst,this);if(!hwnd_)return 1;BuildUi();LoadConfig();RefreshClients();SetTimer(hwnd_,kClientTimer,1000,nullptr);ShowWindow(hwnd_,SW_SHOW);UpdateWindow(hwnd_);MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}cancel_=true;if(worker_.joinable())worker_.join();return (int)msg.wParam;}
-private:
-    HINSTANCE inst_=nullptr;HWND hwnd_=nullptr,clients_=nullptr,status_=nullptr,log_=nullptr;std::vector<GameClient> games_;ScanConfig cfg_{};EquipPointDb db_{};std::thread worker_;std::atomic<bool> r
+    int Run(HINSTANCE inst){inst_=inst;INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTest
