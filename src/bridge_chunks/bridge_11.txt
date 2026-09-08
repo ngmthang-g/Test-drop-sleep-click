@@ -1,0 +1,155 @@
+uintptr_t>(b.control.object);
+    });
+    if (hits.empty()) {
+        SetText(detail, cap, L"Không có UIButton/UIRect callback tại tọa độ đã gán • geometry=");
+        AppendInt(detail, cap, geometryCount);
+        return false;
+    }
+    if (hits.size() > 1 && std::fabs(hits[0].area - hits[1].area) <= 0.5f &&
+        hits[0].depth == hits[1].depth && hits[0].control.object != hits[1].control.object) {
+        SetText(detail, cap, L"Hai callback UI đồng hạng tại tọa độ item; fail-closed");
+        return false;
+    }
+    selected = std::move(hits.front().control);
+    return true;
+}
+
+bool ClassifyControl(Il2CppClass* klass, UiKind& kind) {
+    for (const auto& cached : g_ui.kindCache) {
+        if (cached.first == klass) { kind = cached.second; return true; }
+    }
+    bool matched = false;
+    if (g_ui.button && g_api.class_is_assignable_from(g_ui.button, klass)) {
+        kind = UiKind::Button; matched = true;
+    } else if (g_ui.toggle && g_api.class_is_assignable_from(g_ui.toggle, klass)) {
+        kind = UiKind::Toggle; matched = true;
+    } else if (g_ui.rect && g_api.class_is_assignable_from(g_ui.rect, klass)) {
+        kind = UiKind::Rect; matched = true;
+    }
+    if (matched) g_ui.kindCache.push_back({klass, kind});
+    return matched;
+}
+
+bool ReadBasicControl(Il2CppObject* object, Il2CppClass* klass, UiKind kind,
+                      UiControl& output) {
+    wchar_t ignored[128]{};
+    std::int32_t active = 0;
+    if (!ScalarGetter(klass, "get_ActiveInHierarchy", object, active, ignored, _countof(ignored)) || !active)
+        return false;
+    if (kind != UiKind::Rect) {
+        std::int32_t interactable = 0;
+        if (!ScalarGetter(klass, "get_Interactable", object, interactable, ignored, _countof(ignored)) ||
+            !interactable) return false;
+    }
+    output = {};
+    output.object = object;
+    output.klass = klass;
+    output.kind = kind;
+    (void)ReadUiString(object, klass, "Name", output.labels.name);
+    if (kind != UiKind::Rect) (void)ReadUiString(object, klass, "Text", output.labels.text);
+    if (kind == UiKind::Rect)
+        (void)ReadUiString(object, klass, "PointerClickHandler", output.labels.handler);
+    return true;
+}
+
+bool EnumerateControls(std::vector<UiControl>& controls, wchar_t* detail, std::size_t cap) {
+    controls.clear();
+    if (!EnsureUiDiscovery(detail, cap)) return false;
+    Il2CppObject* dictionary = nullptr;
+    g_api.field_static_get_value(g_ui.instances, &dictionary);
+    Il2CppObject* entries = nullptr;
+    std::int32_t count = 0;
+    std::uintptr_t capacity = 0;
+    if (!dictionary || !ReadLocal(dictionary, 0x18, entries) || !entries ||
+        !ReadLocal(dictionary, 0x20, count) || count < 0 || count > 32768 ||
+        !ReadLocal(entries, 0x18, capacity) || capacity > 32768) {
+        SetText(detail, cap, L"UIObject.instances dictionary không hợp lệ");
+        return false;
+    }
+
+    // Scan the complete entries-array capacity, not merely [0,count). A Dictionary can
+    // contain deleted buckets; limiting the scan to Count silently misses live controls.
+    for (std::uintptr_t i = 0; i < capacity; ++i) {
+        Il2CppObject* object = nullptr;
+        const std::size_t entry = 0x20 + static_cast<std::size_t>(i) * 0x18;
+        if (!ReadLocal(entries, entry + 0x10, object) || !object) continue;
+        std::uint8_t disposed = 1;
+        Il2CppClass* klass = nullptr;
+        if (!ReadLocal(object, 0x60, disposed) || disposed != 0 || !ReadLocal(object, 0, klass) || !klass)
+            continue;
+        UiKind kind{};
+        if (!ClassifyControl(klass, kind)) continue;
+        UiControl control{};
+        if (ReadBasicControl(object, klass, kind, control)) controls.push_back(std::move(control));
+    }
+    return true;
+}
+
+void AppendLabel(std::wstring& target, const std::wstring& value) {
+    if (value.empty()) return;
+    if (target.find(value) != std::wstring::npos) return;
+    if (!target.empty()) target += L"/";
+    target += value;
+}
+
+void CollectDescendantLabels(UiControl& control) {
+    control.labels.descendants.clear();
+    std::vector<Il2CppObject*> pending{control.object};
+    std::vector<Il2CppObject*> visited;
+    while (!pending.empty() && visited.size() < 96) {
+        Il2CppObject* current = pending.back();
+        pending.pop_back();
+        if (!current || std::find(visited.begin(), visited.end(), current) != visited.end()) continue;
+        visited.push_back(current);
+
+        Il2CppClass* klass = nullptr;
+        if (!ReadLocal(current, 0, klass) || !klass) continue;
+        if (current != control.object) {
+            std::wstring name;
+            if (ReadUiString(current, klass, "Name", name))
+                AppendLabel(control.labels.descendants, name);
+            // Do not require the child to be UIButton/UIToggle/UIRect. The
+            // visible caption in the proven probe is often a plain UIText/
+            // label node whose parent owns HandleClickEvent().
+            std::wstring childText;
+            if (ReadUiString(current, klass, "Text", childText))
+                AppendLabel(control.labels.descendants, childText);
+        }
+
+        Il2CppObject* childrenArray = nullptr;
+        if (!ObjectGetter(current, klass, "get_CoreChildren", childrenArray) || !childrenArray)
+            (void)ObjectGetter(current, klass, "get_Children", childrenArray);
+        if (!childrenArray) continue;
+        std::vector<Il2CppObject*> children;
+        if (!ReadManagedPointerArray(childrenArray, children, 128)) continue;
+        for (Il2CppObject* child : children) pending.push_back(child);
+    }
+}
+
+bool ReadAncestors(UiControl& control);
+
+bool EnumerateActiveUiObjects(std::vector<UiControl>& objects, wchar_t* detail, std::size_t cap) {
+    objects.clear();
+    if (!EnsureUiDiscovery(detail, cap)) return false;
+    Il2CppObject* dictionary = nullptr;
+    g_api.field_static_get_value(g_ui.instances, &dictionary);
+    Il2CppObject* entries = nullptr;
+    std::int32_t count = 0;
+    std::uintptr_t capacity = 0;
+    if (!dictionary || !ReadLocal(dictionary, 0x18, entries) || !entries ||
+        !ReadLocal(dictionary, 0x20, count) || count < 0 || count > 32768 ||
+        !ReadLocal(entries, 0x18, capacity) || capacity > 32768) {
+        SetText(detail, cap, L"UIObject.instances dictionary không hợp lệ");
+        return false;
+    }
+    for (std::uintptr_t i = 0; i < capacity; ++i) {
+        Il2CppObject* object = nullptr;
+        const std::size_t entry = 0x20 + static_cast<std::size_t>(i) * 0x18;
+        if (!ReadLocal(entries, entry + 0x10, object) || !object) continue;
+        Il2CppClass* klass = nullptr;
+        // Match the proven v0.1.8 probe: do not assume that offset 0x60 is a
+        // disposed byte on every client build. ActiveInHierarchy is the runtime
+        // validity gate for this semantic-only scan.
+        if (!ReadLocal(object, 0, klass) || !klass) continue;
+        const MethodInfo* activeGetter = FindMethod(klass, "get_ActiveInHierarchy", 0);
+        if (activeGetter) {
