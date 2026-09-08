@@ -1,0 +1,141 @@
+tSyncDrag(manager); SetText(detail, cap, L"Hidden drag: TryClickUI thất bại"); return false;
+    }
+    if (!ReadInputSyncDragging(manager, dragging, detail, cap) || !dragging) {
+        CancelOwnedInputSyncDrag(manager); SetText(detail, cap, L"Hidden drag: START không tạo được UI drag target"); return false;
+    }
+    constexpr int kSteps = 12;
+    for (int i=1;i<=kSteps;++i) {
+        const float q=static_cast<float>(i)/static_cast<float>(kSteps);
+        UnityVector2 point{}; point.x=start.x+(end.x-start.x)*q; point.y=start.y+(end.y-start.y)*q;
+        void* args[] = {&point};
+        if (!InvokeVoid(g_ui.inputSyncDrag, manager, args, detail, cap)) {
+            CancelOwnedInputSyncDrag(manager); SetText(detail, cap, L"Hidden drag: UpdateUIDrag thất bại; đã cancel"); return false;
+        }
+    }
+    void* releaseArgs[] = {&end};
+    if (!InvokeVoid(g_ui.inputSyncRelease, manager, releaseArgs, detail, cap)) {
+        CancelOwnedInputSyncDrag(manager); SetText(detail, cap, L"Hidden drag: EndUIDrag thất bại; đã cancel"); return false;
+    }
+    if (!ReadInputSyncDragging(manager, dragging, detail, cap)) return false;
+    if (dragging) { CancelOwnedInputSyncDrag(manager); SetText(detail, cap, L"Hidden drag chưa nhả state; đã cancel"); return false; }
+    return true;
+}
+
+bool DragInternalPoint(int startNormalizedX, int startNormalizedY, int packedEnd,
+                       Response& response, wchar_t* detail, std::size_t cap) {
+    Classes c{};
+    if (!ResolveClasses(c, detail, cap)) return false;
+    const int qx=(static_cast<unsigned int>(packedEnd)>>16)&0xffff;
+    const int qy=static_cast<unsigned int>(packedEnd)&0xffff;
+    const int endNormalizedX=static_cast<int>((static_cast<long long>(qx)*kCoordinateScale+32767)/65535);
+    const int endNormalizedY=static_cast<int>((static_cast<long long>(qy)*kCoordinateScale+32767)/65535);
+    if (!InvokeInternalPointDrag(startNormalizedX,startNormalizedY,endNormalizedX,endNormalizedY,detail,cap)) return false;
+    response.resultCode=static_cast<std::int32_t>(ActionResult::ActionInvoked);
+    SetText(detail, cap, L"InputSync hidden drag PASS: TryClickUI → UpdateUIDrag x12 → EndUIDrag");
+    return true;
+}
+
+bool ReadRectArea(Il2CppObject* rectTransform, float& area) {
+    area = 0.0f;
+    Il2CppClass* klass = rectTransform ? g_api.object_get_class(rectTransform) : nullptr;
+    const MethodInfo* getter = klass ? FindMethod(klass, "get_rect", 0) : nullptr;
+    if (!getter) return false;
+    Il2CppObject* boxed = nullptr;
+    wchar_t ignored[128]{};
+    if (!InvokeObject(getter, rectTransform, boxed, ignored, _countof(ignored)) || !boxed) return false;
+    const void* raw = g_api.object_unbox(boxed);
+    if (!raw) return false;
+    const UnityRectValue value = *reinterpret_cast<const UnityRectValue*>(raw);
+    area = std::fabs(value.width * value.height);
+    return std::isfinite(area) && area > 0.0f;
+}
+
+bool BuildUnityScreenPoint(int normalizedX, int normalizedY, UnityVector2& point,
+                           const MethodInfo*& contains, wchar_t* detail, std::size_t cap) {
+    contains = nullptr;
+    if (!EnsureUiGeometry(detail, cap)) return false;
+    if (normalizedX < 0 || normalizedX >= kCoordinateScale ||
+        normalizedY < 0 || normalizedY >= kCoordinateScale) {
+        SetText(detail, cap, L"Tọa độ chuẩn hóa ô trang bị nằm ngoài client");
+        return false;
+    }
+    std::int32_t width = 0, height = 0;
+    if (!StaticScalar(g_ui.unityScreen, "get_width", width, detail, cap) || width <= 0 ||
+        !StaticScalar(g_ui.unityScreen, "get_height", height, detail, cap) || height <= 0) {
+        SetText(detail, cap, L"Không đọc được Unity Screen.width/height");
+        return false;
+    }
+    contains = ExactMethod(
+        g_ui.rectTransformUtility, "RectangleContainsScreenPoint", 3, true,
+        "UnityEngine.RectTransform", "UnityEngine.Vector2", "UnityEngine.Camera");
+    if (!contains) {
+        SetText(detail, cap, L"Không resolve đúng RectTransformUtility.RectangleContainsScreenPoint(3)");
+        return false;
+    }
+    point.x = static_cast<float>(static_cast<double>(normalizedX) * width /
+                                 kCoordinateScale);
+    const double topY = static_cast<double>(normalizedY) * height /
+                        kCoordinateScale;
+    point.y = static_cast<float>(height - 1.0 - topY);
+    return true;
+}
+
+bool RectContainsScreenPoint(Il2CppObject* rectTransform, const UnityVector2& screenPoint,
+                             const MethodInfo* contains) {
+    UnityVector2 point = screenPoint;
+    Il2CppObject* camera = nullptr;
+    void* args[] = {&rectTransform, &point, &camera};
+    std::int64_t result = 0;
+    wchar_t ignored[192]{};
+    return InvokeScalarArgs(contains, nullptr, args, result, ignored, _countof(ignored)) && result != 0;
+}
+
+int UiDepth(Il2CppObject* object) {
+    int depth = 0;
+    std::vector<Il2CppObject*> seen;
+    while (object && depth < 64) {
+        if (std::find(seen.begin(), seen.end(), object) != seen.end()) break;
+        seen.push_back(object);
+        Il2CppClass* klass = g_api.object_get_class(object);
+        Il2CppObject* parent = nullptr;
+        if (!klass || !ObjectGetter(object, klass, "get_Parent", parent) || !parent) break;
+        object = parent;
+        ++depth;
+    }
+    return depth;
+}
+
+bool EnumerateControls(std::vector<UiControl>& controls, wchar_t* detail, std::size_t cap);
+
+[[maybe_unused]] bool FindControlAtNormalizedPoint(int normalizedX, int normalizedY, UiControl& selected,
+                                  wchar_t* detail, std::size_t cap) {
+    if (!EnsureUiGeometry(detail, cap)) return false;
+    UnityVector2 screenPoint{};
+    const MethodInfo* contains = nullptr;
+    if (!BuildUnityScreenPoint(normalizedX, normalizedY, screenPoint, contains, detail, cap)) return false;
+    std::vector<UiControl> controls;
+    if (!EnumerateControls(controls, detail, cap)) return false;
+    struct Hit {
+        UiControl control{};
+        float area = 0.0f;
+        int depth = 0;
+    };
+    std::vector<Hit> hits;
+    int geometryCount = 0;
+    for (UiControl& control : controls) {
+        if (control.kind == UiKind::Toggle) continue;
+        if (control.kind == UiKind::Rect && control.labels.handler.empty()) continue;
+        Il2CppObject* rectTransform = nullptr;
+        if (!ResolveRectTransform(control.object, control.klass, rectTransform)) continue;
+        ++geometryCount;
+        if (!RectContainsScreenPoint(rectTransform, screenPoint, contains)) continue;
+        float area = 3.4e38f;
+        (void)ReadRectArea(rectTransform, area);
+        const int depth = UiDepth(control.object);
+        hits.push_back({std::move(control), area, depth});
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+        if (std::fabs(a.area - b.area) > 0.5f) return a.area < b.area;
+        if (a.depth != b.depth) return a.depth > b.depth;
+        return reinterpret_cast<std::uintptr_t>(a.control.object) <
+               reinterpret_cast<std::
