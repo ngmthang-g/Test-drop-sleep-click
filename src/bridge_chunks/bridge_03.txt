@@ -1,0 +1,172 @@
+2CppClass* klass, const char* name, void* instance, std::int32_t& out,
+                  wchar_t* detail, std::size_t cap) {
+    std::int64_t value = 0;
+    if (!InvokeScalar(FindMethod(klass, name, 0), instance, value, detail, cap)) return false;
+    if (value < INT32_MIN || value > INT32_MAX) { SetText(detail, cap, L"Scalar vượt Int32"); return false; }
+    out = static_cast<std::int32_t>(value);
+    return true;
+}
+
+bool ScalarGetter64(Il2CppClass* klass, const char* name, void* instance, std::int64_t& out,
+                    wchar_t* detail, std::size_t cap) {
+    return InvokeScalar(FindMethod(klass, name, 0), instance, out, detail, cap);
+}
+
+bool StaticScalar(Il2CppClass* klass, const char* name, std::int32_t& out,
+                  wchar_t* detail, std::size_t cap) {
+    const MethodInfo* m = FindMethod(klass, name, 0);
+    if (!m || !StaticMethod(m)) { SetText(detail, cap, L"Static getter chưa resolve"); return false; }
+    return ScalarGetter(klass, name, nullptr, out, detail, cap);
+}
+
+bool InvokeVoid(const MethodInfo* method, void* instance, void** args,
+                wchar_t* detail, std::size_t cap) {
+    if (!method) { SetText(detail, cap, L"Action method chưa resolve"); return false; }
+    void* exc = nullptr;
+    (void)g_api.runtime_invoke(method, instance, args, &exc);
+    if (exc) { SetText(detail, cap, L"Action ném managed exception"); return false; }
+    return true;
+}
+
+bool CopyString(Il2CppString* value, wchar_t* out, std::size_t cap) {
+    if (!value || !out || cap == 0) return false;
+    const int len = g_api.string_length(value);
+    const wchar_t* chars = g_api.string_chars(value);
+    if (len < 0 || len > 4096 || !chars) return false;
+    std::size_t n = static_cast<std::size_t>(len);
+    if (n + 1 > cap) n = cap - 1;
+    for (std::size_t i = 0; i < n; ++i) out[i] = chars[i];
+    out[n] = 0;
+    return true;
+}
+
+
+struct Classes {
+    Il2CppClass* gameApi = nullptr;
+    Il2CppClass* shared = nullptr;
+};
+
+bool ResolveClasses(Classes& c, wchar_t* detail, std::size_t cap) {
+    if (!g_api.Load(detail, cap)) return false;
+    const Il2CppImage* image = Image();
+    if (!image) { SetText(detail, cap, L"Không mở được Assembly-CSharp"); return false; }
+    c.gameApi = g_api.class_from_name(image, "FGStudio.LuaSystem.API", "LuaSystemAPI_Game");
+    c.shared = g_api.class_from_name(image, "FGStudio.LuaSystem", "LuaSystemSharedData");
+    if (!c.gameApi || !c.shared) {
+        SetText(detail, cap, L"Thiếu class semantic bag bắt buộc trên client này");
+        return false;
+    }
+    return true;
+}
+
+constexpr int kCoordinateScale = 1000000;
+
+enum class UiKind { Button, Toggle, Rect };
+
+struct UiRuntime {
+    bool discoveryReady = false;
+    bool luaReady = false;
+    const Il2CppImage* image = nullptr;
+    Il2CppClass* uiObject = nullptr;
+    Il2CppClass* button = nullptr;
+    Il2CppClass* toggle = nullptr;
+    Il2CppClass* rect = nullptr;
+    Il2CppClass* executor = nullptr;
+    Il2CppClass* guiApi = nullptr;
+    Il2CppClass* systemObject = nullptr;
+    const Il2CppImage* coreImage = nullptr;
+    const Il2CppImage* uiModuleImage = nullptr;
+    const Il2CppImage* legacyUnityImage = nullptr;
+    Il2CppClass* unityRectTransform = nullptr;
+    Il2CppClass* unityTransform = nullptr;
+    Il2CppClass* unityGameObject = nullptr;
+    Il2CppClass* rectTransformUtility = nullptr;
+    Il2CppClass* unityScreen = nullptr;
+    bool geometryReady = false;
+    Il2CppClass* inputSyncManager = nullptr;
+    const MethodInfo* inputSyncGetInstance = nullptr;
+    const MethodInfo* inputSyncPress = nullptr;
+    const MethodInfo* inputSyncDrag = nullptr;
+    const MethodInfo* inputSyncRelease = nullptr;
+    const MethodInfo* inputSyncCancel = nullptr;
+    FieldInfo* inputSyncDragging = nullptr;
+    bool internalPointClickReady = false;
+    FieldInfo* instances = nullptr;
+    std::vector<std::pair<Il2CppClass*, UiKind>> kindCache{};
+};
+
+struct UiControl {
+    Il2CppObject* object = nullptr;
+    Il2CppClass* klass = nullptr;
+    UiKind kind = UiKind::Button;
+    Labels labels{};
+    // v0.1.8 uses Tag/selectionID as part of the destination identity. Keep it
+    // outside Labels because the background UI role scorer does not need it.
+    std::wstring tag;
+};
+
+UiRuntime g_ui;
+
+template <typename T>
+bool ReadLocal(const void* base, std::size_t offset, T& value) {
+    if (!base) return false;
+    SIZE_T done = 0;
+    const auto* address = reinterpret_cast<const unsigned char*>(base) + offset;
+    return ReadProcessMemory(GetCurrentProcess(), address, &value, sizeof(value), &done) != FALSE &&
+           done == sizeof(value);
+}
+
+template <typename T>
+bool WriteLocal(void* base, std::size_t offset, const T& value) {
+    if (!base) return false;
+    SIZE_T done = 0;
+    auto* address = reinterpret_cast<unsigned char*>(base) + offset;
+    return WriteProcessMemory(GetCurrentProcess(), address, &value, sizeof(value), &done) != FALSE &&
+           done == sizeof(value);
+}
+
+FieldInfo* FindField(Il2CppClass* klass, const char* name) {
+    for (Il2CppClass* current = klass; current; current = g_api.class_get_parent(current)) {
+        if (FieldInfo* field = g_api.class_get_field_from_name(current, name)) return field;
+    }
+    return nullptr;
+}
+
+bool IsExecutorClass(Il2CppClass* klass) {
+    return klass && ExactMethod(klass, "get_Instance", 0, true) &&
+           ExactMethod(klass, "ExecuteScriptFunction", 3, false);
+}
+
+bool IsUiObjectClass(Il2CppClass* klass) {
+    return klass && FindField(klass, "instances");
+}
+
+bool IsButtonClass(Il2CppClass* klass) {
+    return klass && ExactMethod(klass, "HandleClickEvent", 0, false);
+}
+
+bool IsToggleClass(Il2CppClass* klass) {
+    return klass &&
+           (ExactMethod(klass, "set_Selected", 1, false, "System.Boolean") ||
+            ExactMethod(klass, "HandleSelectEvent", 1, false, "System.Boolean"));
+}
+
+bool IsRectClass(Il2CppClass* klass) {
+    return klass && ExactMethod(klass, "get_PointerClickHandler", 0, false);
+}
+
+void FindUiClassesByMetadata(const Il2CppImage* image) {
+    if (!image || !g_api.image_get_class_count || !g_api.image_get_class || !g_api.class_get_name)
+        return;
+    const std::size_t count = g_api.image_get_class_count(image);
+    if (count == 0 || count > 65536) return;
+    for (std::size_t i = 0; i < count; ++i) {
+        Il2CppClass* klass = g_api.image_get_class(image, i);
+        const char* name = klass ? g_api.class_get_name(klass) : nullptr;
+        if (!name) continue;
+        if (!g_ui.uiObject && Eq(name, "UIObject") && IsUiObjectClass(klass)) g_ui.uiObject = klass;
+        else if (!g_ui.button && Eq(name, "UIButton") && IsButtonClass(klass)) g_ui.button = klass;
+        else if (!g_ui.toggle && Eq(name, "UIToggle") && IsToggleClass(klass)) g_ui.toggle = klass;
+        else if (!g_ui.rect && Eq(name, "UIRectTransform") && IsRectClass(klass)) g_ui.rect = klass;
+        else if (!g_ui.executor && Eq(name, "MonoBehaviourExecutor") && IsExecutorClass(klass))
+            g_ui.executor = klass
