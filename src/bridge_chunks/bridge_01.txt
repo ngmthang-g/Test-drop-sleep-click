@@ -150,10 +150,4 @@ struct Api {
         // These exports are optional: known namespaces remain the fast path, while
         // metadata enumeration lets the same verified class surface survive a namespace move.
         (void)Resolve(module, "il2cpp_image_get_class_count", image_get_class_count);
-        (void)Resolve(module, "il2cpp_image_get_class", image_get_class);
-        (void)Resolve(module, "il2cpp_class_get_name", class_get_name);
-        (void)Resolve(module, "il2cpp_class_get_methods", class_get_methods);
-        (void)Resolve(module, "il2cpp_method_get_name", method_get_name);
-        uiDiscoveryExportsLoaded = true;
-        return true;
-    }
+        (void)Resolve(module, "il2c
