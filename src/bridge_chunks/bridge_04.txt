@@ -1,5 +1,4 @@
-;
-        if (g_ui.uiObject && g_ui.button && g_ui.toggle && g_ui.rect && g_ui.executor) return;
+ui.rect && g_ui.executor) return;
     }
 }
 
@@ -136,4 +135,5 @@ bool InvokeEnum32NameArgs(const MethodInfo* method, void* instance, void** args,
     if (!raw) { SetText(detail, cap, L"Không unbox enum"); return false; }
     value = *reinterpret_cast<const std::int32_t*>(raw);
     if (name && nameCap) {
-        Il2CppClass* klass = 
+        Il2CppClass* klass = g_api.object_get_class(boxed);
+        const MethodInfo* toString = klass ? F
