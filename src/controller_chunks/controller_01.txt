@@ -118,7 +118,7 @@ void LoadSellIni(ScanConfig& c) {
     c.roiH=GetPrivateProfileIntW(L"SellImage",L"RoiH",0,ini.c_str());
     c.roiBaseW=GetPrivateProfileIntW(L"SellImage",L"BaseW",0,ini.c_str());
     c.roiBaseH=GetPrivateProfileIntW(L"SellImage",L"BaseH",0,ini.c_str());
-    c.thresholdPercent=std::clamp(GetPrivateProfileIntW(L"SellImage",L"Threshold",88,ini.c_str()),1,100);
+    c.thresholdPercent=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"SellImage",L"Threshold",88,ini.c_str())),1,100);
 }
 
 bool HasModule(DWORD pid,const wchar_t* name) {
