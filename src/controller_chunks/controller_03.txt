@@ -1,4 +1,25 @@
-SellWnd";RegisterClassExW(&wc);hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,790,600,nullptr,nullptr,inst,this);if(!hwnd_)return 1;BuildUi();LoadConfig();RefreshClients();SetTimer(hwnd_,kClientTimer,1000,nullptr);ShowWindow(hwnd_,SW_SHOW);UpdateWindow(hwnd_);MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}cancel_=true;if(worker_.joinable())worker_.join();return (int)msg.wParam;}
+>=0)best.score=ScoreAt(frame,tpl,best.x,best.y,1);best.found=best.score>=threshold;return best;}
+
+class App;
+App* g_app=nullptr;
+
+class App {
+public:
+    int Run(HINSTANCE inst){
+        inst_=inst;
+        INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
+        WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTestSellWnd";
+        RegisterClassExW(&wc);
+        hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,790,600,nullptr,nullptr,inst,this);
+        if(!hwnd_){const DWORD e=GetLastError();wchar_t msg[256]{};swprintf_s(msg,L"Không tạo được cửa sổ. GetLastError=%lu",static_cast<unsigned long>(e));MessageBoxW(nullptr,msg,L"ThanLongTestSell startup error",MB_OK|MB_ICONERROR);return 1;}
+        BuildUi();
+        // Hiện UI trước mọi scan/config nặng: double-click phải thấy cửa sổ ngay.
+        ShowWindow(hwnd_,SW_SHOW);UpdateWindow(hwnd_);
+        try{LoadConfig();}catch(const std::exception& e){Log(L"CONFIG EXCEPTION • "+std::wstring(e.what(),e.what()+std::strlen(e.what())));}catch(...){Log(L"CONFIG EXCEPTION • unknown");}
+        // Không quét module trước ShowWindow. Lần quét đầu chạy sau khi UI đã hiện.
+        SetTimer(hwnd_,kClientTimer,250,nullptr);
+        MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}cancel_=true;if(worker_.joinable())worker_.join();return (int)msg.wParam;
+    }
 private:
     HINSTANCE inst_=nullptr;HWND hwnd_=nullptr,clients_=nullptr,status_=nullptr,log_=nullptr;std::vector<GameClient> games_;ScanConfig cfg_{};EquipPointDb db_{};std::thread worker_;std::atomic<bool> running_{false},cancel_{false};std::mutex logMu_;
 
@@ -12,6 +33,4 @@ private:
     bool ReadAllBag(BridgeClient&b,std::vector<BagItemSnapshot>&items,std::wstring&err){items.clear();int start=0,total=-1;for(int guard=0;guard<10;++guard){Response r{};if(!b.Call(Command::ReadBagPage,start,0,0,r,err,1800))return false;if(total<0)total=r.bagPage.totalCount;for(int i=0;i<r.bagPage.pageCount;++i)items.push_back(r.bagPage.items[i]);start+=r.bagPage.pageCount;if(r.bagPage.pageCount<=0||start>=total)break;}return total>=0;}
     std::vector<int> WeaponPositions(const std::vector<BagItemSnapshot>&items){std::vector<int> pos;for(const auto&i:items){const auto ep=db_.Find(i.itemID);bag_filter_v2_logic::ItemDecisionInput d{};d.position=i.position;d.isEquip=i.isEquip!=0;d.bound=i.bound!=0;d.equipPointKnown=ep.has_value();d.equipPoint=ep.value_or(-1);d.exactNameOverride=false;if(!d.bound&&bag_filter_v2_logic::IsWeapon(d))pos.push_back(i.position);}return bag_filter_v2_logic::NormalizeCandidates(std::move(pos));}
     bool ClickPoint(BridgeClient&b,const GameClient&g,const ClickStep&p,std::wstring&err){int x=0,y=0;if(!ResolvePoint(p,g.hwnd,x,y)){err=L"tọa chưa hợp lệ";return false;}RECT rc{};GetClientRect(g.hwnd,&rc);const int nx=NormalizeCoord(x,rc.right),ny=NormalizeCoord(y,rc.bottom);Response r{};return b.Call(Command::ClickInternalPointRawTest,nx,ny,0,r,err,1000);}
-    bool DragOnce(BridgeClient&b,const GameClient&g,std::wstring&err){int sx=0,sy=0,ex=0,ey=0;if(!ResolvePoint(cfg_.swipeStart,g.hwnd,sx,sy)||!ResolvePoint(cfg_.swipeEnd,g.hwnd,ex,ey)){err=L"thiếu swipe_start/swipe_end";return false;}RECT rc{};GetClientRect(g.hwnd,&rc);const int nsx=NormalizeCoord(sx,rc.right),nsy=NormalizeCoord(sy,rc.bottom),nex=NormalizeCoord(ex,rc.right),ney=NormalizeCoord(ey,rc.bottom);auto q16=[](int v){return(int)(((long long)std::clamp(v,0,kCoordinateScale)*65535LL+kCoordinateScale/2)/kCoordinateScale);};const int packed=((q16(nex)&0xffff)<<16)|(q16(ney)&0xffff);Response r{};return b.Call(Command::DragInternalPoint,nsx,nsy,packed,r,err,1200);}
-    bool ProbeInternalSell(BridgeClient&b,bool&found,std::wstring&err){Response r{};if(!b.Call(Command::ProbeItemSellAction,0,0,0,r,err,900))return false;found=r.value0!=0;return true;}
-    bool WaitAndClickInternalSell(BridgeClient&b,std::wstring&err){const ULONGLONG deadline=GetTickCount64()+kPopupTimeoutMs;for(;;){if(cancel_){err=L"đã hủy";return false;}Response r{};if(!b.Call(Command::ClickItemSellAction,0,0,0,r,err,900))return false;if(r.value0!=0)break;if(GetTickCount64()>=deadline){err=L"timeout chưa thấy dòng BÁN nội bộ";return false;}if(!SwitchToThread())YieldProcessor();}const ULONGLONG gone=GetTickCount64()+kGoneTimeoutMs;for(;;){bool found=false;if(!ProbeInternalSell(b,found,err))return false;if(!found)return true;if(GetTickCount64()>=gone){err=L"dòng BÁN chưa biến mất sau callback";return false;}if(!S
+    bool DragOnce(BridgeClient&b,const GameClient&g,std::wstring&err){int sx=0,sy=0,ex=0,ey=0;if(!ResolvePoint(cfg_.swipeStart,g.hwnd,sx,sy)||!ResolvePoint(cfg_.swipeEnd,g.hwnd
