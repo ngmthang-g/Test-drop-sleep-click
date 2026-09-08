@@ -1,0 +1,133 @@
+c tay nải (indexed/enumerator/position đều fail)");
+        return false;
+    }
+
+    wchar_t ignored[128]{};
+    if (!StaticScalar(c.gameApi, "GetFreeBagSpace", freeSpace, ignored, _countof(ignored)) || freeSpace < 0) freeSpace = -1;
+    return true;
+}
+
+bool StaticBoolByItemID(Il2CppClass* gameApi, const char* methodName, std::int32_t itemID, bool& out) {
+    out = false;
+    const MethodInfo* method = FindMethod(gameApi, methodName, 1);
+    if (!method || !StaticMethod(method)) return false;
+    void* args[] = {&itemID}; std::int64_t value = 0; wchar_t ignored[96]{};
+    if (!InvokeScalarArgs(method, nullptr, args, value, ignored, _countof(ignored))) return false;
+    out = value != 0; return true;
+}
+
+bool FillBagItemSnapshot(const Classes& c, Il2CppObject* object, BagItemSnapshot& out,
+                         wchar_t* detail, std::size_t cap) {
+    out = {};
+    if (!object) return false;
+    Il2CppClass* klass = g_api.object_get_class(object);
+    if (!klass) return false;
+    std::int64_t v = 0;
+    if (!ReadScalarMember64(object, klass, "ID", v) || v <= 0) { SetText(detail, cap, L"Bag item thiếu ID"); return false; }
+    out.instanceID = v;
+    if (!ReadScalarMember64(object, klass, "ItemID", v) || v <= 0 || v > INT32_MAX) { SetText(detail, cap, L"Bag item thiếu ItemID"); return false; }
+    out.itemID = static_cast<std::int32_t>(v);
+    if (ReadScalarMember64(object, klass, "Site", v) && v >= INT32_MIN && v <= INT32_MAX) out.site = static_cast<std::int32_t>(v);
+    if (ReadScalarMember64(object, klass, "Position", v) && v >= INT32_MIN && v <= INT32_MAX) out.position = static_cast<std::int32_t>(v);
+    if (ReadScalarMember64(object, klass, "Quantity", v) && v >= 0 && v <= INT32_MAX) out.quantity = static_cast<std::int32_t>(v);
+    if (ReadScalarMember64(object, klass, "Bound", v)) out.bound = v ? 1 : 0;
+
+    const MethodInfo* getName = FindMethod(c.gameApi, "GetItemName", 1);
+    if (getName && StaticMethod(getName)) {
+        std::int32_t id = out.itemID; void* args[] = {&id}; Il2CppObject* str = nullptr; wchar_t ignored[96]{};
+        if (InvokeObjectArgs(getName, nullptr, args, str, ignored, _countof(ignored)) && str)
+            (void)CopyString(reinterpret_cast<Il2CppString*>(str), out.name, _countof(out.name));
+    }
+
+    const MethodInfo* getType = FindMethod(c.gameApi, "GetItemType", 1);
+    if (getType && StaticMethod(getType)) {
+        std::int32_t id = out.itemID; void* args[] = {&id};
+        (void)InvokeEnum32NameArgs(getType, nullptr, args, out.itemTypeCode, out.itemType, _countof(out.itemType), detail, cap);
+    }
+    out.isEquip = (_wcsicmp(out.itemType, L"Equip") == 0) ? 1 : 0;
+    if (out.isEquip) {
+        const MethodInfo* getEquip = FindMethod(c.gameApi, "GetEquipType", 1);
+        if (getEquip && StaticMethod(getEquip)) {
+            std::int32_t id = out.itemID; void* args[] = {&id};
+            (void)InvokeEnum32NameArgs(getEquip, nullptr, args, out.equipTypeCode, out.equipType, _countof(out.equipType), detail, cap);
+        }
+        out.isWeapon = (_wcsicmp(out.equipType, L"Weapon") == 0) ? 1 : 0;
+    }
+    bool flag = false;
+    if (StaticBoolByItemID(c.gameApi, "IsItemThrowable", out.itemID, flag)) out.throwable = flag ? 1 : 0;
+    if (StaticBoolByItemID(c.gameApi, "IsItemSellable", out.itemID, flag)) out.sellable = flag ? 1 : 0;
+    return true;
+}
+
+bool ReadBagPage(int start, Response& response, wchar_t* detail, std::size_t cap) {
+    Classes c{};
+    if (!ResolveClasses(c, detail, cap)) return false;
+    std::vector<Il2CppObject*> items; int freeSpace = -1;
+    if (!ReadBagObjects(c, items, freeSpace, detail, cap)) return false;
+    start = std::clamp(start, 0, static_cast<int>(items.size()));
+    response.bagPage.totalCount = static_cast<std::int32_t>(items.size());
+    response.bagPage.pageStart = start;
+    response.bagPage.freeBagSpace = freeSpace;
+    const int count = std::min<int>(static_cast<int>(kBagPageCapacity), static_cast<int>(items.size()) - start);
+    for (int i = 0; i < count; ++i) {
+        if (!FillBagItemSnapshot(c, items[static_cast<std::size_t>(start + i)], response.bagPage.items[i], detail, cap)) return false;
+    }
+    response.bagPage.pageCount = count;
+    response.value0 = response.bagPage.totalCount;
+    response.value1 = freeSpace;
+    SetText(detail, cap, L"Bag semantic page "); AppendInt(detail, cap, start); Append(detail, cap, L"+"); AppendInt(detail, cap, count);
+    return true;
+}
+
+bool StringGetter(Il2CppObject* object, Il2CppClass* klass, const char* name,
+                  std::wstring& output) {
+    output.clear();
+    wchar_t ignored[128]{};
+    Il2CppObject* boxed = nullptr;
+    const MethodInfo* getter = FindMethod(klass, name, 0);
+    if (!getter || !InvokeObject(getter, ManagedThis(object), boxed, ignored, _countof(ignored)) || !boxed) return false;
+    wchar_t value[1024]{};
+    if (!CopyString(reinterpret_cast<Il2CppString*>(boxed), value, _countof(value))) return false;
+    output = value;
+    return true;
+}
+
+bool EnsureManagedStringFactory() {
+    return g_api.string_new || (g_api.module && Resolve(g_api.module, "il2cpp_string_new", g_api.string_new));
+}
+
+bool IsPrimitiveField(FieldInfo* field) {
+    return field && (FieldType(field, "System.Boolean") || FieldType(field, "System.Byte") ||
+                     FieldType(field, "System.SByte") || FieldType(field, "System.Int16") ||
+                     FieldType(field, "System.UInt16") || FieldType(field, "System.Int32") ||
+                     FieldType(field, "System.UInt32") || FieldType(field, "System.Int64") ||
+                     FieldType(field, "System.UInt64") || FieldType(field, "System.Single") ||
+                     FieldType(field, "System.Double"));
+}
+
+// This is the v0.1.8 ObjMember() lookup order. The production route used to
+// stop after a property getter/backing string field, while the probe also
+// handled UI wrappers that expose CoreChildren, Text or Tag through an
+// indexer-like getter (get_Item/GetValue/Get/RawGet).
+bool ReadUiMemberObject(Il2CppObject* object, Il2CppClass* klass, const char* member,
+                        Il2CppObject*& output) {
+    output = nullptr;
+    if (!object || !klass || !member) return false;
+
+    const std::string getterName = std::string("get_") + member;
+    if (const MethodInfo* getter = FindMethod(klass, getterName.c_str(), 0)) {
+        wchar_t ignored[128]{};
+        Il2CppObject* value = nullptr;
+        if (InvokeObject(getter, ManagedThis(object), value, ignored, _countof(ignored)) && value) {
+            output = value;
+            return true;
+        }
+    }
+
+    // Only read reference/string fields through the object pointer path. A
+    // primitive field must be handled by ReadUiMemberText below instead of
+    // being misinterpreted as a pointer.
+    if ((!g_api.class_is_valuetype || !g_api.class_is_valuetype(klass))) {
+        if (FieldInfo* field = FindField(klass, member); field && !IsPrimitiveField(field)) {
+            Il2CppObject* value = nullptr;
+            g
