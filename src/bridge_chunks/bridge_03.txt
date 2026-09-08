@@ -1,4 +1,4 @@
-2CppClass* klass, const char* name, void* instance, std::int32_t& out,
+instance, std::int32_t& out,
                   wchar_t* detail, std::size_t cap) {
     std::int64_t value = 0;
     if (!InvokeScalar(FindMethod(klass, name, 0), instance, value, detail, cap)) return false;
@@ -169,4 +169,5 @@ void FindUiClassesByMetadata(const Il2CppImage* image) {
         else if (!g_ui.toggle && Eq(name, "UIToggle") && IsToggleClass(klass)) g_ui.toggle = klass;
         else if (!g_ui.rect && Eq(name, "UIRectTransform") && IsRectClass(klass)) g_ui.rect = klass;
         else if (!g_ui.executor && Eq(name, "MonoBehaviourExecutor") && IsExecutorClass(klass))
-            g_ui.executor = klass
+            g_ui.executor = klass;
+        if (g_ui.uiObject && g_ui.button && g_ui.toggle && g_
