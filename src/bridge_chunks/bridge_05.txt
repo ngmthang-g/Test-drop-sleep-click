@@ -1,0 +1,154 @@
+indMethod(klass, "ToString", 0) : nullptr;
+        Il2CppObject* str = nullptr;
+        wchar_t ignored[96]{};
+        if (toString && InvokeObject(toString, boxed, str, ignored, _countof(ignored)) && str)
+            (void)CopyString(reinterpret_cast<Il2CppString*>(str), name, nameCap);
+    }
+    return true;
+}
+
+const MethodInfo* BagListMethod(const Classes& c) {
+    const MethodInfo* method = FindMethod(c.gameApi, "GetItemsAtSite", 1);
+    if (method && StaticMethod(method)) return method;
+    method = FindMethod(c.shared, "GetItemsAtSite", 1);
+    return method && StaticMethod(method) ? method : nullptr;
+}
+
+const MethodInfo* BagItemAtSiteMethod(const Classes& c) {
+    const MethodInfo* method = FindMethod(c.gameApi, "GetItemAtSite", 2);
+    if (method && StaticMethod(method)) return method;
+    method = FindMethod(c.shared, "GetItemAtSite", 2);
+    return method && StaticMethod(method) ? method : nullptr;
+}
+
+bool TryReadBagIndexed(Il2CppObject* collection, Il2CppClass* cc, std::vector<Il2CppObject*>& items) {
+    items.clear();
+    std::int32_t count = 0;
+    wchar_t ignored[128]{};
+    if (!ScalarGetter(cc, "get_Count", collection, count, ignored, _countof(ignored)) || count < 0 || count > 1000)
+        return false;
+
+    // v1.3 incorrectly fell back to any one-argument get_Item(). A Dictionary<int,T> also has
+    // get_Item(Int32), but its argument is a KEY, not an ordinal index. Sparse bag positions therefore
+    // throw KeyNotFoundException when looping 0..Count-1. Only accept the exact Int32 indexer and
+    // treat any managed exception as a signal to use a safer semantic enumeration path below.
+    const MethodInfo* getItem = ExactMethod(cc, "get_Item", 1, false, "System.Int32");
+    if (!getItem) return false;
+
+    std::vector<Il2CppObject*> candidate;
+    candidate.reserve(static_cast<std::size_t>(count));
+    for (std::int32_t i = 0; i < count; ++i) {
+        std::int32_t index = i;
+        void* itemArgs[] = {&index};
+        Il2CppObject* item = nullptr;
+        wchar_t itemError[96]{};
+        if (!InvokeObjectArgs(getItem, collection, itemArgs, item, itemError, _countof(itemError)))
+            return false;
+        if (item) candidate.push_back(item);
+    }
+    items.swap(candidate);
+    return true;
+}
+
+bool LooksLikeBagItemObject(Il2CppObject* object) {
+    if (!object) return false;
+    Il2CppClass* klass = g_api.object_get_class(object);
+    if (!klass) return false;
+    const bool hasId = FindField(klass, "ID") || FindMethod(klass, "get_ID", 0);
+    const bool hasItemId = FindField(klass, "ItemID") || FindMethod(klass, "get_ItemID", 0);
+    return hasId && hasItemId;
+}
+
+bool TryUnwrapBagEnumeratorCurrent(Il2CppObject* current, Il2CppObject*& item) {
+    item = nullptr;
+    if (!current) return true;
+    if (LooksLikeBagItemObject(current)) { item = current; return true; }
+
+    // Dictionary enumerators expose KeyValuePair<TKey,TValue>. Unwrap Value without assuming
+    // the concrete generic dictionary type. If it is some other enumerable shape, fail softly.
+    Il2CppClass* klass = g_api.object_get_class(current);
+    const MethodInfo* getValue = klass ? FindMethod(klass, "get_Value", 0) : nullptr;
+    if (!getValue) return false;
+    Il2CppObject* value = nullptr;
+    wchar_t ignored[96]{};
+    if (!InvokeObject(getValue, current, value, ignored, _countof(ignored))) return false;
+    if (!value || !LooksLikeBagItemObject(value)) return false;
+    item = value;
+    return true;
+}
+
+bool TryReadBagEnumerator(Il2CppObject* collection, Il2CppClass* cc, std::vector<Il2CppObject*>& items) {
+    items.clear();
+    const MethodInfo* getEnumerator = FindMethod(cc, "GetEnumerator", 0);
+    if (!getEnumerator) return false;
+    Il2CppObject* enumerator = nullptr;
+    wchar_t ignored[128]{};
+    if (!InvokeObject(getEnumerator, collection, enumerator, ignored, _countof(ignored)) || !enumerator) return false;
+    Il2CppClass* ec = g_api.object_get_class(enumerator);
+    if (!ec) return false;
+    const MethodInfo* moveNext = FindMethod(ec, "MoveNext", 0);
+    const MethodInfo* getCurrent = FindMethod(ec, "get_Current", 0);
+    if (!moveNext || !getCurrent) return false;
+
+    std::vector<Il2CppObject*> candidate;
+    candidate.reserve(100);
+    for (int guard = 0; guard < 1000; ++guard) {
+        std::int64_t moved = 0;
+        if (!InvokeScalar(moveNext, enumerator, moved, ignored, _countof(ignored))) return false;
+        if (!moved) { items.swap(candidate); return true; }
+        Il2CppObject* current = nullptr;
+        if (!InvokeObject(getCurrent, enumerator, current, ignored, _countof(ignored))) return false;
+        Il2CppObject* item = nullptr;
+        if (!TryUnwrapBagEnumeratorCurrent(current, item)) return false;
+        if (item) candidate.push_back(item);
+    }
+    return false;
+}
+
+bool TryReadBagByPosition(const Classes& c, std::vector<Il2CppObject*>& items) {
+    items.clear();
+    const MethodInfo* getItem = BagItemAtSiteMethod(c);
+    if (!getItem) return false;
+
+    std::vector<Il2CppObject*> candidate;
+    candidate.reserve(100);
+    int successfulCalls = 0;
+    std::int32_t site = 10;
+    // Cover both possible 0-based and 1-based 100-slot position conventions.
+    for (std::int32_t position = 0; position <= 100; ++position) {
+        void* args[] = {&site, &position};
+        Il2CppObject* item = nullptr;
+        wchar_t ignored[96]{};
+        if (!InvokeObjectArgs(getItem, nullptr, args, item, ignored, _countof(ignored))) continue;
+        ++successfulCalls;
+        if (!item) continue;
+        bool duplicate = false;
+        for (Il2CppObject* existing : candidate) if (existing == item) { duplicate = true; break; }
+        if (!duplicate) candidate.push_back(item);
+    }
+    if (successfulCalls == 0) return false;
+    items.swap(candidate);
+    return true;
+}
+
+bool ReadBagObjects(const Classes& c, std::vector<Il2CppObject*>& items, int& freeSpace,
+                    wchar_t* detail, std::size_t cap) {
+    items.clear(); freeSpace = -1;
+    const MethodInfo* getItems = BagListMethod(c);
+    if (!getItems) { SetText(detail, cap, L"Không resolve GetItemsAtSite"); return false; }
+    std::int32_t site = 10;
+    void* args[] = {&site};
+    Il2CppObject* collection = nullptr;
+    if (!InvokeObjectArgs(getItems, nullptr, args, collection, detail, cap) || !collection) {
+        SetText(detail, cap, L"GetItemsAtSite(Bag) trả null"); return false;
+    }
+    Il2CppClass* cc = g_api.object_get_class(collection);
+    if (!cc) { SetText(detail, cap, L"Bag collection thiếu class"); return false; }
+
+    // Prefer the cheap list path, but never let one managed indexer exception kill the full scan.
+    // Sparse/keyed collections fall through to enumerator, then to the semantic per-position API.
+    bool readOk = TryReadBagIndexed(collection, cc, items);
+    if (!readOk) readOk = TryReadBagEnumerator(collection, cc, items);
+    if (!readOk) readOk = TryReadBagByPosition(c, items);
+    if (!readOk) {
+        SetText(detail, cap, L"Không enumerate đượ
