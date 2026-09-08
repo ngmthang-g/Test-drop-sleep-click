@@ -1,0 +1,154 @@
+_api.field_get_value(object, field, &value);
+            if (value) {
+                output = value;
+                return true;
+            }
+        }
+    }
+
+    if (!EnsureManagedStringFactory()) return false;
+    Il2CppString* key = g_api.string_new(member);
+    if (!key) return false;
+    for (const char* methodName : {"get_Item", "GetValue", "Get", "RawGet"}) {
+        if (const MethodInfo* method = FindMethod(klass, methodName, 1)) {
+            void* args[] = {&key};
+            wchar_t ignored[128]{};
+            Il2CppObject* value = nullptr;
+            if (InvokeObject(method, ManagedThis(object), value, ignored, _countof(ignored)) && value) {
+                output = value;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool ManagedObjectText(Il2CppObject* object, std::wstring& output) {
+    output.clear();
+    if (!object) return false;
+    Il2CppClass* klass = g_api.object_get_class(object);
+    const char* className = klass && g_api.class_get_name ? g_api.class_get_name(klass) : nullptr;
+    if (className && (Eq(className, "String") || Eq(className, "System.String"))) {
+        wchar_t value[1024]{};
+        if (!CopyString(reinterpret_cast<Il2CppString*>(object), value, _countof(value))) return false;
+        output = value;
+        return !output.empty();
+    }
+
+    void* raw = g_api.object_unbox(object);
+    if (!className || !raw) return false;
+    if (Eq(className, "Boolean") || Eq(className, "System.Boolean")) {
+        output = *reinterpret_cast<const std::uint8_t*>(raw) ? L"1" : L"0"; return true;
+    }
+    if (Eq(className, "Int32") || Eq(className, "System.Int32")) {
+        output = std::to_wstring(*reinterpret_cast<const std::int32_t*>(raw)); return true;
+    }
+    if (Eq(className, "UInt32") || Eq(className, "System.UInt32")) {
+        output = std::to_wstring(*reinterpret_cast<const std::uint32_t*>(raw)); return true;
+    }
+    if (Eq(className, "Int64") || Eq(className, "System.Int64")) {
+        output = std::to_wstring(*reinterpret_cast<const std::int64_t*>(raw)); return true;
+    }
+    if (Eq(className, "UInt64") || Eq(className, "System.UInt64")) {
+        output = std::to_wstring(*reinterpret_cast<const std::uint64_t*>(raw)); return true;
+    }
+    if (Eq(className, "Int16") || Eq(className, "System.Int16")) {
+        output = std::to_wstring(*reinterpret_cast<const std::int16_t*>(raw)); return true;
+    }
+    if (Eq(className, "UInt16") || Eq(className, "System.UInt16")) {
+        output = std::to_wstring(*reinterpret_cast<const std::uint16_t*>(raw)); return true;
+    }
+    return false;
+}
+
+bool ReadUiMemberText(Il2CppObject* object, Il2CppClass* klass, const char* member,
+                      std::wstring& output) {
+    output.clear();
+    if (!object || !klass || !member) return false;
+    Il2CppObject* value = nullptr;
+    if (ReadUiMemberObject(object, klass, member, value) && ManagedObjectText(value, output)) return true;
+
+    FieldInfo* field = FindField(klass, member);
+    if (!field) return false;
+    if (FieldType(field, "System.String")) {
+        Il2CppString* stringValue = nullptr;
+        g_api.field_get_value(object, field, &stringValue);
+        if (!stringValue) return false;
+        wchar_t buffer[1024]{};
+        if (!CopyString(stringValue, buffer, _countof(buffer))) return false;
+        output = buffer;
+        return !output.empty();
+    }
+    if (FieldType(field, "System.Boolean")) { std::uint8_t value{}; g_api.field_get_value(object, field, &value); output = value ? L"1" : L"0"; return true; }
+    if (FieldType(field, "System.Int32")) { std::int32_t value{}; g_api.field_get_value(object, field, &value); output = std::to_wstring(value); return true; }
+    if (FieldType(field, "System.UInt32")) { std::uint32_t value{}; g_api.field_get_value(object, field, &value); output = std::to_wstring(value); return true; }
+    if (FieldType(field, "System.Int64")) { std::int64_t value{}; g_api.field_get_value(object, field, &value); output = std::to_wstring(value); return true; }
+    if (FieldType(field, "System.UInt64")) { std::uint64_t value{}; g_api.field_get_value(object, field, &value); output = std::to_wstring(value); return true; }
+    return false;
+}
+
+// v0.1.8's TextMember() accepts a property, backing field, or dynamic member.
+// Keep the same order for visible text, Tag/selectionID, and child labels.
+bool ReadUiString(Il2CppObject* object, Il2CppClass* klass, const char* property,
+                  std::wstring& output) {
+    return ReadUiMemberText(object, klass, property, output);
+}
+
+bool ObjectGetter(Il2CppObject* object, Il2CppClass* klass, const char* name,
+                  Il2CppObject*& output) {
+    // Existing production callers historically passed "get_Parent" while
+    // v0.1.8's ObjMember() accepts the property name "Parent". Normalize both
+    // forms so the proven dynamic-member fallback is used by every caller.
+    const char* member = name;
+    if (name && name[0] == 'g' && name[1] == 'e' && name[2] == 't' && name[3] == '_')
+        member = name + 4;
+    return ReadUiMemberObject(object, klass, member, output);
+}
+
+const Il2CppImage* GeometryImage(ImageSlot slot) {
+    switch (slot) {
+        case ImageSlot::CoreModule: return g_ui.coreImage;
+        case ImageSlot::UiModule: return g_ui.uiModuleImage;
+        case ImageSlot::LegacyUnity: return g_ui.legacyUnityImage;
+    }
+    return nullptr;
+}
+
+Il2CppClass* ResolveGeometryClass(GeometryClass role) {
+    const unity_geometry_logic::SearchPlan plan = unity_geometry_logic::PlanFor(role);
+    for (ImageSlot slot : plan.images) {
+        const Il2CppImage* image = GeometryImage(slot);
+        if (!image) continue;
+        Il2CppClass* klass = g_api.class_from_name(image, "UnityEngine", plan.className);
+        if (klass) return klass;
+    }
+    return nullptr;
+}
+
+void OpenUnityImages() {
+    if (!g_ui.coreImage)
+        g_ui.coreImage = ImageForAssembly("UnityEngine.CoreModule", "UnityEngine.CoreModule.dll");
+    if (!g_ui.uiModuleImage)
+        g_ui.uiModuleImage = ImageForAssembly("UnityEngine.UIModule", "UnityEngine.UIModule.dll");
+    if (!g_ui.legacyUnityImage)
+        g_ui.legacyUnityImage = ImageForAssembly("UnityEngine", "UnityEngine.dll");
+}
+
+void AppendGeometryAvailability(wchar_t* detail, std::size_t cap) {
+    Append(detail, cap, L" • assembly Core=");
+    Append(detail, cap, g_ui.coreImage ? L"OK" : L"NO");
+    Append(detail, cap, L" UI=");
+    Append(detail, cap, g_ui.uiModuleImage ? L"OK" : L"NO");
+    Append(detail, cap, L" Legacy=");
+    Append(detail, cap, g_ui.legacyUnityImage ? L"OK" : L"NO");
+}
+
+bool EnsureUiGeometry(wchar_t* detail, std::size_t cap) {
+    if (g_ui.geometryReady) return true;
+    if (!EnsureUiDiscovery(detail, cap)) return false;
+    OpenUnityImages();
+    if (!g_ui.coreImage && !g_ui.uiModuleImage && !g_ui.legacyUnityImage) {
+        SetText(detail, cap, L"Không mở được CoreModule/UIModule/UnityEngine.dll để hit-test tọa độ");
+        return false;
+    }
+    g_ui.unityRec
