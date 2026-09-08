@@ -1,0 +1,134 @@
+           std::int32_t active = 0; wchar_t ignored[128]{};
+            // v0.1.8 treats ActiveInHierarchy as an optional validity filter:
+            // unreadable is not the same as inactive. The old production code
+            // discarded the whole row when this getter was unavailable or
+            // temporarily threw while the NPC dialog was being built.
+            if (ScalarGetter(klass, "get_ActiveInHierarchy", object, active, ignored, _countof(ignored)) && !active)
+                continue;
+        }
+        UiControl row{}; row.object = object; row.klass = klass; row.kind = UiKind::Button;
+        (void)ReadUiString(object, klass, "Name", row.labels.name);
+        (void)ReadUiString(object, klass, "Text", row.labels.text);
+        (void)ReadUiString(object, klass, "Tag", row.tag);
+        (void)ReadAncestors(row);
+        // Probe v0.1.8 falls back to descendant text for clickable controls. Keep the
+        // same behavior here so a popup whose visible "Xác nhận" lives on a child label
+        // is still eligible even when the parent button itself has empty get_Text().
+        CollectDescendantLabels(row);
+        objects.push_back(std::move(row));
+    }
+    return true;
+}
+
+bool ReadAncestors(UiControl& control) {
+    control.labels.ancestors.clear();
+    Il2CppObject* parentArray = nullptr;
+    if (ObjectGetter(control.object, control.klass, "get_CoreParents", parentArray) && parentArray) {
+        std::vector<Il2CppObject*> parents;
+        if (ReadManagedPointerArray(parentArray, parents, 64)) {
+            for (Il2CppObject* parent : parents) {
+                Il2CppClass* klass = nullptr;
+                if (!ReadLocal(parent, 0, klass) || !klass) continue;
+                std::wstring name;
+                if (ReadUiString(parent, klass, "Name", name)) AppendLabel(control.labels.ancestors, name);
+            }
+            if (!control.labels.ancestors.empty()) return true;
+        }
+    }
+
+    Il2CppObject* current = control.object;
+    std::vector<Il2CppObject*> seen;
+    for (int depth = 0; depth < 12 && current; ++depth) {
+        if (std::find(seen.begin(), seen.end(), current) != seen.end()) break;
+        seen.push_back(current);
+        Il2CppClass* klass = nullptr;
+        if (!ReadLocal(current, 0, klass) || !klass) break;
+        Il2CppObject* parent = nullptr;
+        if (!ObjectGetter(current, klass, "get_Parent", parent) || !parent) break;
+        Il2CppClass* parentClass = nullptr;
+        if (!ReadLocal(parent, 0, parentClass) || !parentClass) break;
+        std::wstring name;
+        if (ReadUiString(parent, parentClass, "Name", name)) AppendLabel(control.labels.ancestors, name);
+        current = parent;
+    }
+    return !control.labels.ancestors.empty();
+}
+
+bool ExecutorInstance(Il2CppObject*& instance, const MethodInfo*& execute,
+                      wchar_t* detail, std::size_t cap) {
+    instance = nullptr;
+    execute = nullptr;
+    const MethodInfo* getInstance = ExactMethod(g_ui.executor, "get_Instance", 0, true);
+    if (!getInstance || !InvokeObject(getInstance, nullptr, instance, detail, cap) || !instance) {
+        SetText(detail, cap, L"MonoBehaviourExecutor.Instance chưa sẵn sàng");
+        return false;
+    }
+    execute = ExactMethod(g_ui.executor, "ExecuteScriptFunction", 3, false);
+    if (!execute) { SetText(detail, cap, L"Thiếu ExecuteScriptFunction(UIObject,string,object[])"); return false; }
+    return true;
+}
+
+bool ExecuteLuaOnObject(Il2CppObject* uiObject, Il2CppString* function,
+                        Il2CppObject* argsArray, wchar_t* detail, std::size_t cap) {
+    Il2CppObject* executor = nullptr;
+    const MethodInfo* execute = nullptr;
+    if (!uiObject || !function || !argsArray || !ExecutorInstance(executor, execute, detail, cap)) return false;
+    void* args[] = {&uiObject, &function, &argsArray};
+    return InvokeVoid(execute, executor, args, detail, cap);
+}
+
+bool InvokeControl(UiControl& control, wchar_t* detail, std::size_t cap) {
+    if (control.kind == UiKind::Button) {
+        const MethodInfo* click = ExactMethod(control.klass, "HandleClickEvent", 0, false);
+        if (!click) { SetText(detail, cap, L"UIButton thiếu HandleClickEvent()"); return false; }
+        return InvokeVoid(click, control.object, nullptr, detail, cap);
+    }
+    if (control.kind == UiKind::Toggle) {
+        std::int32_t selected = 0;
+        wchar_t ignored[128]{};
+        if (ScalarGetter(control.klass, "get_Selected", control.object, selected, ignored, _countof(ignored)) && selected)
+            return true;
+        std::uint8_t yes = 1;
+        void* args[] = {&yes};
+        const MethodInfo* setSelected = ExactMethod(control.klass, "set_Selected", 1, false, "System.Boolean");
+        if (setSelected && InvokeVoid(setSelected, control.object, args, detail, cap)) return true;
+        const MethodInfo* selectEvent = ExactMethod(control.klass, "HandleSelectEvent", 1, false, "System.Boolean");
+        if (!selectEvent) { SetText(detail, cap, L"UIToggle thiếu callback chọn"); return false; }
+        return InvokeVoid(selectEvent, control.object, args, detail, cap);
+    }
+
+    if (!EnsureUiLua(false, detail, cap)) return false;
+    Il2CppObject* handlerObject = nullptr;
+    if (!ObjectGetter(control.object, control.klass, "get_PointerClickHandler", handlerObject) || !handlerObject) {
+        SetText(detail, cap, L"UIRect không có PointerClickHandler");
+        return false;
+    }
+    Il2CppObject* argsArray = g_api.array_new(g_ui.systemObject, 3);
+    if (!argsArray || !WriteLocal(argsArray, 0x20, control.object)) {
+        SetText(detail, cap, L"Không tạo được object[3] cho UIRect callback");
+        return false;
+    }
+    return ExecuteLuaOnObject(control.object, reinterpret_cast<Il2CppString*>(handlerObject),
+                              argsArray, detail, cap);
+}
+
+
+std::wstring FoldKey(const std::wstring& input) {
+    std::wstring output;
+    output.reserve(input.size());
+    for (wchar_t c : input) {
+        c = static_cast<wchar_t>(std::towlower(c));
+        switch (c) {
+            case L'à': case L'á': case L'ả': case L'ã': case L'ạ':
+            case L'ă': case L'ằ': case L'ắ': case L'ẳ': case L'ẵ': case L'ặ':
+            case L'â': case L'ầ': case L'ấ': case L'ẩ': case L'ẫ': case L'ậ': c=L'a'; break;
+            case L'đ': c=L'd'; break;
+            case L'è': case L'é': case L'ẻ': case L'ẽ': case L'ẹ':
+            case L'ê': case L'ề': case L'ế': case L'ể': case L'ễ': case L'ệ': c=L'e'; break;
+            case L'ì': case L'í': case L'ỉ': case L'ĩ': case L'ị': c=L'i'; break;
+            case L'ò': case L'ó': case L'ỏ': case L'õ': case L'ọ':
+            case L'ô': case L'ồ': case L'ố': case L'ổ': case L'ỗ': case L'ộ':
+            case L'ơ': case L'ờ': case L'ớ': case L'ở': case L'ỡ': case L'ợ': c=L'o'; break;
+            case L'ù': case L'ú': case L'ủ': case L'ũ': case L'ụ':
+            case L'ư': case L'ừ': case L'ứ': case L'ử': case L'ữ': case L'ự': c=L'u'; break;
+            case L'ỳ': case L'ý': case L'ỷ': ca
