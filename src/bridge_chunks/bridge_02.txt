@@ -1,0 +1,161 @@
+ve(module, "il2cpp_image_get_class", image_get_class);
+        (void)Resolve(module, "il2cpp_class_get_name", class_get_name);
+        (void)Resolve(module, "il2cpp_class_get_methods", class_get_methods);
+        (void)Resolve(module, "il2cpp_method_get_name", method_get_name);
+        uiDiscoveryExportsLoaded = true;
+        return true;
+    }
+
+    bool LoadUiLua(wchar_t* detail, std::size_t cap) {
+        if (!LoadUiDiscovery(detail, cap)) return false;
+        if (uiLuaExportsLoaded) return true;
+        if (!Resolve(module, "il2cpp_get_corlib", get_corlib)) {
+            SetText(detail, cap, L"Lua callback thiếu export get_corlib");
+            return false;
+        }
+        if (!Resolve(module, "il2cpp_array_new", array_new)) {
+            SetText(detail, cap, L"Lua callback thiếu export array_new");
+            return false;
+        }
+        if (!Resolve(module, "il2cpp_string_new", string_new)) {
+            SetText(detail, cap, L"Lua callback thiếu export string_new");
+            return false;
+        }
+        uiLuaExportsLoaded = true;
+        return true;
+    }
+};
+
+Api g_api;
+
+const Il2CppImage* Image() {
+    Il2CppDomain* domain = g_api.domain_get ? g_api.domain_get() : nullptr;
+    if (!domain) return nullptr;
+    const Il2CppAssembly* assembly = g_api.domain_assembly_open(domain, "Assembly-CSharp");
+    if (!assembly) assembly = g_api.domain_assembly_open(domain, "Assembly-CSharp.dll");
+    return assembly ? g_api.assembly_get_image(assembly) : nullptr;
+}
+
+const Il2CppImage* ImageForAssembly(const char* name, const char* dllName) {
+    Il2CppDomain* domain = g_api.domain_get ? g_api.domain_get() : nullptr;
+    if (!domain) return nullptr;
+    const Il2CppAssembly* assembly = g_api.domain_assembly_open(domain, name);
+    if (!assembly && dllName) assembly = g_api.domain_assembly_open(domain, dllName);
+    return assembly ? g_api.assembly_get_image(assembly) : nullptr;
+}
+
+bool StaticMethod(const MethodInfo* method) {
+    if (!method) return false;
+    constexpr std::uint32_t StaticFlag = 0x0010;
+    std::uint32_t iflags = 0;
+    return (g_api.method_get_flags(method, &iflags) & StaticFlag) != 0;
+}
+
+const MethodInfo* FindMethod(Il2CppClass* klass, const char* name, int argc) {
+    for (Il2CppClass* c = klass; c; c = g_api.class_get_parent(c)) {
+        if (const MethodInfo* m = g_api.class_get_method_from_name(c, name, argc)) return m;
+    }
+    return nullptr;
+}
+
+bool ParamType(const MethodInfo* m, std::uint32_t index, const char* expected) {
+    if (!m || index >= g_api.method_get_param_count(m)) return false;
+    const Il2CppType* t = g_api.method_get_param(m, index);
+    char* n = t ? g_api.type_get_name(t) : nullptr;
+    if (!n) return false;
+    bool ok = Eq(n, expected);
+    g_api.free_fn(n);
+    return ok;
+}
+
+bool ReturnType(const MethodInfo* method, const char* expected) {
+    if (!method || !expected) return false;
+    const Il2CppType* type = g_api.method_get_return_type(method);
+    char* name = type ? g_api.type_get_name(type) : nullptr;
+    if (!name) return false;
+    const bool matches = Eq(name, expected);
+    g_api.free_fn(name);
+    return matches;
+}
+
+bool FieldType(FieldInfo* field, const char* expected) {
+    if (!field || !expected) return false;
+    const Il2CppType* type = g_api.field_get_type(field);
+    char* name = type ? g_api.type_get_name(type) : nullptr;
+    if (!name) return false;
+    const bool matches = Eq(name, expected);
+    g_api.free_fn(name);
+    return matches;
+}
+
+const MethodInfo* ExactMethod(Il2CppClass* klass, const char* name, int argc, bool isStatic,
+                              const char* p0 = nullptr, const char* p1 = nullptr, const char* p2 = nullptr) {
+    const MethodInfo* m = FindMethod(klass, name, argc);
+    if (!m || StaticMethod(m) != isStatic) return nullptr;
+    if (argc > 0 && p0 && !ParamType(m, 0, p0)) return nullptr;
+    if (argc > 1 && p1 && !ParamType(m, 1, p1)) return nullptr;
+    if (argc > 2 && p2 && !ParamType(m, 2, p2)) return nullptr;
+    return m;
+}
+
+bool InvokeObjectArgs(const MethodInfo* method, void* instance, void** args,
+                      Il2CppObject*& out, wchar_t* detail, std::size_t cap) {
+    out = nullptr;
+    if (!method) { SetText(detail, cap, L"Method object chưa resolve"); return false; }
+    void* exc = nullptr;
+    out = g_api.runtime_invoke(method, instance, args, &exc);
+    if (exc) { SetText(detail, cap, L"Managed exception ở object getter"); return false; }
+    return true;
+}
+
+bool InvokeObject(const MethodInfo* method, void* instance, Il2CppObject*& out, wchar_t* detail, std::size_t cap) {
+    return InvokeObjectArgs(method, instance, nullptr, out, detail, cap);
+}
+
+// IL2CPP runtime_invoke expects the unboxed payload when an instance is a
+// boxed value type. The v0.1.8 probe used this normalization for every
+// property/member read and for HandleClickEvent callbacks.
+void* ManagedThis(Il2CppObject* object) {
+    if (!object) return nullptr;
+    Il2CppClass* klass = g_api.object_get_class(object);
+    if (klass && g_api.class_is_valuetype(klass)) {
+        void* unboxed = g_api.object_unbox(object);
+        if (unboxed) return unboxed;
+    }
+    return object;
+}
+
+bool InvokeScalarArgs(const MethodInfo* method, void* instance, void** args,
+                      std::int64_t& out, wchar_t* detail, std::size_t cap) {
+    out = 0;
+    if (!method) { SetText(detail, cap, L"Scalar method chưa resolve"); return false; }
+    const Il2CppType* rt = g_api.method_get_return_type(method);
+    char* tn = rt ? g_api.type_get_name(rt) : nullptr;
+    if (!tn) { SetText(detail, cap, L"Không đọc được return type"); return false; }
+    void* exc = nullptr;
+    Il2CppObject* boxed = g_api.runtime_invoke(method, instance, args, &exc);
+    if (exc || !boxed) { g_api.free_fn(tn); SetText(detail, cap, L"Scalar getter lỗi/null"); return false; }
+    void* raw = g_api.object_unbox(boxed);
+    if (!raw) { g_api.free_fn(tn); SetText(detail, cap, L"Không unbox scalar"); return false; }
+    bool ok = true;
+    if (Eq(tn, "System.Boolean")) out = *reinterpret_cast<const std::uint8_t*>(raw) ? 1 : 0;
+    else if (Eq(tn, "System.Int32")) out = *reinterpret_cast<const std::int32_t*>(raw);
+    else if (Eq(tn, "System.UInt32")) out = *reinterpret_cast<const std::uint32_t*>(raw);
+    else if (Eq(tn, "System.Int64")) out = *reinterpret_cast<const std::int64_t*>(raw);
+    else if (Eq(tn, "System.UInt64")) {
+        const std::uint64_t value = *reinterpret_cast<const std::uint64_t*>(raw);
+        if (value > static_cast<std::uint64_t>(INT64_MAX)) ok = false;
+        else out = static_cast<std::int64_t>(value);
+    }
+    else ok = false;
+    g_api.free_fn(tn);
+    if (!ok) SetText(detail, cap, L"Return type scalar chưa hỗ trợ");
+    return ok;
+}
+
+bool InvokeScalar(const MethodInfo* method, void* instance, std::int64_t& out,
+                  wchar_t* detail, std::size_t cap) {
+    return InvokeScalarArgs(method, instance, nullptr, out, detail, cap);
+}
+
+bool ScalarGetter(Il
