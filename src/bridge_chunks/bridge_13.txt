@@ -1,0 +1,104 @@
+se L'ỹ': case L'ỵ': c=L'y'; break;
+            default: break;
+        }
+        if (std::iswalnum(c)) output.push_back(c);
+    }
+    return output;
+}
+
+bool HasAny(const std::wstring& s, std::initializer_list<const wchar_t*> needles) {
+    for (const wchar_t* n : needles) if (n && *n && s.find(n) != std::wstring::npos) return true;
+    return false;
+}
+
+int SellActionScore(UiControl& c) {
+    (void)ReadAncestors(c);
+    CollectDescendantLabels(c);
+    const std::wstring text=FoldKey(c.labels.text);
+    const std::wstring name=FoldKey(c.labels.name);
+    const std::wstring parents=FoldKey(c.labels.ancestors);
+    const std::wstring descendants=FoldKey(c.labels.descendants);
+    const std::wstring all=text+name+parents+descendants;
+    // Popup item action only. Explicitly reject shop tabs / quick-sell surfaces.
+    if (HasAny(all,{L"banvatpham",L"quicksell",L"banvatphamnhanh",L"tabsell",L"selltab",L"npcshop",L"shopitem"})) return 0;
+    if (text==L"ban" || name==L"ban") return 1000;
+    const bool popupContext=HasAny(parents,{L"item",L"tips",L"detail",L"popup",L"bag",L"inventory",L"package",L"equip"});
+    if (popupContext && HasAny(text+name+descendants,{L"buttonban",L"btnban",L"sellbutton",L"itemsellaction"})) return 850;
+    return 0;
+}
+
+bool FindSellAction(std::vector<UiControl>& controls, std::size_t& selectedIndex, bool& found,
+                    wchar_t* detail, std::size_t cap) {
+    found=false; selectedIndex=0;
+    if (!EnumerateControls(controls, detail, cap)) return false;
+    struct Candidate { std::size_t index; int score; };
+    std::vector<Candidate> candidates;
+    for (std::size_t i=0;i<controls.size();++i) { const int score=SellActionScore(controls[i]); if(score>0)candidates.push_back({i,score}); }
+    std::sort(candidates.begin(),candidates.end(),[&](const Candidate&a,const Candidate&b){if(a.score!=b.score)return a.score>b.score;return reinterpret_cast<std::uintptr_t>(controls[a.index].object)<reinterpret_cast<std::uintptr_t>(controls[b.index].object);});
+    if(candidates.empty()){SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}
+    if(candidates.size()>1&&candidates[0].score==candidates[1].score&&controls[candidates[0].index].object!=controls[candidates[1].index].object){SetText(detail,cap,L"Có nhiều dòng BÁN cùng mức tin cậy; fail-closed");return false;}
+    found=true;selectedIndex=candidates[0].index;return true;
+}
+
+bool ProbeItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;response.value0=found?1:0;if(found)SetText(detail,cap,L"Đã thấy đúng một dòng BÁN nội bộ");return true;}
+
+bool ClickItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;if(!found){response.value0=0;SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}if(!InvokeControl(controls[index],detail,cap))return false;response.value0=1;response.resultCode=static_cast<std::int32_t>(ActionResult::ActionInvoked);SetText(detail,cap,L"Đã thấy và callback dòng BÁN ngay trong cùng probe");return true;}
+
+bool EnsureShared() {
+    if (g_shared) return true;
+    wchar_t name[96]{}; MappingName(GetCurrentProcessId(), name, _countof(name));
+    g_mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
+    if (!g_mapping) return false;
+    g_shared = reinterpret_cast<SharedBlock*>(MapViewOfFile(g_mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedBlock)));
+    if (!g_shared || g_shared->magic != kMagic || g_shared->protocolVersion != kProtocolVersion ||
+        g_shared->targetPid != GetCurrentProcessId()) {
+        if (g_shared) UnmapViewOfFile(g_shared);
+        if (g_mapping) CloseHandle(g_mapping);
+        g_shared=nullptr; g_mapping=nullptr; return false;
+    }
+    InterlockedExchange(&g_shared->bridgeLoaded,1);
+    return true;
+}
+
+void ProcessRequest() {
+    if (!EnsureShared()) return;
+    const LONG seq=g_shared->requestSeq;
+    if (seq<=0 || seq==g_shared->completedSeq) return;
+    if (InterlockedCompareExchange(&g_shared->bridgeBusy,1,0)!=0) return;
+    Response r{}; wchar_t detail[512]{}; bool ok=false;
+    if (GetCurrentThreadId()!=g_shared->targetWindowThreadId) {
+        SetText(detail,_countof(detail),L"Sai callback thread; action bị chặn");
+    } else {
+        const Command cmd=static_cast<Command>(g_shared->request.command);
+        switch(cmd) {
+            case Command::ReadBagPage:
+                ok=ReadBagPage(g_shared->request.arg0,r,detail,_countof(detail)); break;
+            case Command::ClickInternalPointRawTest:
+                ok=ClickInternalPointRawTest(g_shared->request.arg0,g_shared->request.arg1,r,detail,_countof(detail)); break;
+            case Command::DragInternalPoint:
+                ok=DragInternalPoint(g_shared->request.arg0,g_shared->request.arg1,g_shared->request.arg2,r,detail,_countof(detail)); break;
+            case Command::ClickItemSellAction:
+                ok=ClickItemSellAction(r,detail,_countof(detail)); break;
+            case Command::ProbeItemSellAction:
+                ok=ProbeItemSellAction(r,detail,_countof(detail)); break;
+            default:
+                SetText(detail,_countof(detail),L"Command test không hợp lệ"); break;
+        }
+    }
+    r.ok=ok?1:0; SetText(r.detail,_countof(r.detail),detail); g_shared->response=r;
+    MemoryBarrier(); InterlockedExchange(&g_shared->completedSeq,seq); InterlockedExchange(&g_shared->bridgeBusy,0);
+}
+
+} // namespace
+
+extern "C" __declspec(dllexport) LRESULT CALLBACK TlcGetMessageHook(int code, WPARAM wParam, LPARAM lParam) {
+    (void)wParam;
+    if (code>=0 && lParam) {
+        const MSG* msg=reinterpret_cast<const MSG*>(lParam);
+        if (msg->message==kWakeMessage) ProcessRequest();
+    }
+    return CallNextHookEx(nullptr,code,wParam,lParam);
+}
+
+BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
+
