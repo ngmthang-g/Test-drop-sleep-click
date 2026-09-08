@@ -1,0 +1,52 @@
+     shared_=reinterpret_cast<SharedBlock*>(MapViewOfFile(mapping_,FILE_MAP_ALL_ACCESS,0,0,sizeof(SharedBlock)));if(!shared_){error=L"không map shared memory";Close();return false;}
+        ZeroMemory(shared_,sizeof(*shared_));shared_->magic=kMagic;shared_->protocolVersion=kProtocolVersion;shared_->targetPid=game.pid;shared_->targetWindowThreadId=game.threadId;
+        const std::wstring dll=ExeDir()+L"\\ThanLongTestSellBridge.dll";localDll_=LoadLibraryW(dll.c_str());if(!localDll_){error=L"thiếu/không load được ThanLongTestSellBridge.dll";Close();return false;}
+        HOOKPROC proc=nullptr;if(!ResolveProc(localDll_,"TlcGetMessageHook",proc)){error=L"Bridge thiếu TlcGetMessageHook";Close();return false;}
+        hook_=SetWindowsHookExW(WH_GETMESSAGE,proc,localDll_,game.threadId);if(!hook_){error=L"không hook được client; chạy cùng quyền với game";Close();return false;}
+        if(!PostThreadMessageW(game.threadId,kWakeMessage,0,0)){error=L"không đánh thức được game thread";Close();return false;}
+        attached_=true;return true;
+    }
+    void Close(){if(hook_)UnhookWindowsHookEx(hook_);if(localDll_)FreeLibrary(localDll_);if(shared_)UnmapViewOfFile(shared_);if(mapping_)CloseHandle(mapping_);hook_=nullptr;localDll_=nullptr;shared_=nullptr;mapping_=nullptr;attached_=false;}
+    bool Call(Command cmd,int a0,int a1,int a2,Response& out,std::wstring& error,DWORD timeoutMs=1200){
+        if(!attached_||!shared_){error=L"bridge chưa attach";return false;}
+        if(shared_->bridgeBusy!=0){error=L"bridge busy";return false;}
+        const LONG next=shared_->requestSeq+1;shared_->request={};shared_->request.command=static_cast<std::uint32_t>(cmd);shared_->request.arg0=a0;shared_->request.arg1=a1;shared_->request.arg2=a2;
+        MemoryBarrier();InterlockedExchange(&shared_->requestSeq,next);if(!PostThreadMessageW(game_.threadId,kWakeMessage,0,0)){error=L"wake game thread FAIL";return false;}
+        const ULONGLONG begin=GetTickCount64();
+        while(GetTickCount64()-begin<timeoutMs){
+            if(shared_->completedSeq==next){MemoryBarrier();out=shared_->response;if(!out.ok){error=out.detail[0]?out.detail:L"bridge trả lỗi";return false;}return true;}
+            // Không fixed Sleep: nhường quantum nhưng kiểm tra lại ngay khi được chạy.
+            if(!SwitchToThread()) YieldProcessor();
+        }
+        error=L"bridge timeout";return false;
+    }
+private:GameClient game_{};HANDLE mapping_=nullptr;SharedBlock* shared_=nullptr;HMODULE localDll_=nullptr;HHOOK hook_=nullptr;bool attached_=false;
+};
+
+template<class T>void ReleaseCom(T*&p){if(p){p->Release();p=nullptr;}}
+bool LoadImageWic(const std::wstring& path,Image& out,std::wstring& error){
+    out={};HRESULT init=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);const bool uninit=SUCCEEDED(init);if(FAILED(init)&&init!=RPC_E_CHANGED_MODE){error=L"CoInitializeEx FAIL";return false;}
+    IWICImagingFactory* f=nullptr;IWICBitmapDecoder*d=nullptr;IWICBitmapFrameDecode*fr=nullptr;IWICFormatConverter*c=nullptr;HRESULT hr=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&f));
+    if(SUCCEEDED(hr))hr=f->CreateDecoderFromFilename(path.c_str(),nullptr,GENERIC_READ,WICDecodeMetadataCacheOnLoad,&d);if(SUCCEEDED(hr))hr=d->GetFrame(0,&fr);if(SUCCEEDED(hr))hr=f->CreateFormatConverter(&c);if(SUCCEEDED(hr))hr=c->Initialize(fr,GUID_WICPixelFormat32bppBGRA,WICBitmapDitherTypeNone,nullptr,0.0,WICBitmapPaletteTypeCustom);
+    UINT w=0,h=0;if(SUCCEEDED(hr))hr=c->GetSize(&w,&h);if(SUCCEEDED(hr)&&w&&h&&w<=8192&&h<=8192){out.width=(int)w;out.height=(int)h;out.bgra.resize((std::size_t)w*h*4u);hr=c->CopyPixels(nullptr,w*4u,(UINT)out.bgra.size(),out.bgra.data());}
+    ReleaseCom(c);ReleaseCom(fr);ReleaseCom(d);ReleaseCom(f);if(uninit)CoUninitialize();if(FAILED(hr)||out.bgra.empty()){out={};error=L"không đọc được sell template";return false;}return true;
+}
+bool CaptureClient(HWND hwnd,Image& out,std::wstring& error){
+    out={};RECT rc{};if(!hwnd||!IsWindow(hwnd)||!GetClientRect(hwnd,&rc)){error=L"HWND client không hợp lệ";return false;}const int w=rc.right-rc.left,h=rc.bottom-rc.top;if(w<=0||h<=0)return false;
+    HDC src=GetDC(hwnd);HDC mem=src?CreateCompatibleDC(src):nullptr;if(!src||!mem){if(src)ReleaseDC(hwnd,src);error=L"DC capture FAIL";return false;}
+    BITMAPINFO bi{};bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);bi.bmiHeader.biWidth=w;bi.bmiHeader.biHeight=-h;bi.bmiHeader.biPlanes=1;bi.bmiHeader.biBitCount=32;bi.bmiHeader.biCompression=BI_RGB;void*bits=nullptr;HBITMAP dib=CreateDIBSection(mem,&bi,DIB_RGB_COLORS,&bits,nullptr,0);if(!dib||!bits){if(dib)DeleteObject(dib);DeleteDC(mem);ReleaseDC(hwnd,src);error=L"DIB FAIL";return false;}
+    HGDIOBJ old=SelectObject(mem,dib);PatBlt(mem,0,0,w,h,BLACKNESS);BOOL ok=PrintWindow(hwnd,mem,PW_CLIENTONLY|kPwRenderFullContent);if(!ok)ok=BitBlt(mem,0,0,w,h,src,0,0,SRCCOPY|CAPTUREBLT);if(ok){out.width=w;out.height=h;out.bgra.resize((std::size_t)w*h*4u);std::memcpy(out.bgra.data(),bits,out.bgra.size());}
+    SelectObject(mem,old);DeleteObject(dib);DeleteDC(mem);ReleaseDC(hwnd,src);if(!ok){out={};error=L"capture client FAIL";return false;}return true;
+}
+inline int ColorDiff(const std::uint8_t*a,const std::uint8_t*b){return std::abs((int)a[0]-(int)b[0])+std::abs((int)a[1]-(int)b[1])+std::abs((int)a[2]-(int)b[2]);}
+double ScoreAt(const Image&frame,const Image&tpl,int ox,int oy,int step){std::uint64_t diff=0,samples=0;for(int ty=0;ty<tpl.height;ty+=step){const auto*tr=tpl.bgra.data()+(std::size_t)ty*tpl.width*4u;const auto*fr=frame.bgra.data()+((std::size_t)(oy+ty)*frame.width+ox)*4u;for(int tx=0;tx<tpl.width;tx+=step){diff+=(std::uint64_t)ColorDiff(fr+(std::size_t)tx*4u,tr+(std::size_t)tx*4u);++samples;}}if(!samples)return -1;return 1.0-(double)diff/((double)samples*765.0);}
+Match FindTemplate(const Image&frame,const Image&tpl,int rx,int ry,int rw,int rh,double threshold){Match best{};if(frame.width<=0||tpl.width<=0)return best;rx=std::clamp(rx,0,frame.width-1);ry=std::clamp(ry,0,frame.height-1);if(rw<=0)rw=frame.width-rx;if(rh<=0)rh=frame.height-ry;const int right=std::clamp(rx+rw,rx+1,frame.width),bottom=std::clamp(ry+rh,ry+1,frame.height),maxX=right-tpl.width,maxY=bottom-tpl.height;if(maxX<rx||maxY<ry)return best;const long long area=(long long)(right-rx)*(bottom-ry);const int posStep=area>800000?2:1,sampleStep=std::max(1,std::min(tpl.width,tpl.height)/18);for(int y=ry;y<=maxY;y+=posStep)for(int x=rx;x<=maxX;x+=posStep){const double s=ScoreAt(frame,tpl,x,y,sampleStep);if(s>best.score){best.score=s;best.x=x;best.y=y;}}if(best.score>=0)best.score=ScoreAt(frame,tpl,best.x,best.y,1);best.found=best.score>=threshold;return best;}
+
+class App;
+App* g_app=nullptr;
+
+class App {
+public:
+    int Run(HINSTANCE inst){inst_=inst;INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTestSellWnd";RegisterClassExW(&wc);hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,790,600,nullptr,nullptr,inst,this);if(!hwnd_)return 1;BuildUi();LoadConfig();RefreshClients();SetTimer(hwnd_,kClientTimer,1000,nullptr);ShowWindow(hwnd_,SW_SHOW);UpdateWindow(hwnd_);MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}cancel_=true;if(worker_.joinable())worker_.join();return (int)msg.wParam;}
+private:
+    HINSTANCE inst_=nullptr;HWND hwnd_=nullptr,clients_=nullptr,status_=nullptr,log_=nullptr;std::vector<GameClient> games_;ScanConfig cfg_{};EquipPointDb db_{};std::thread worker_;std::atomic<bool> r
