@@ -1,0 +1,46 @@
+name: Build TRADE STATE V4.2 RAW BYTE ARRAY
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select V4.2 byte-array observer
+        shell: pwsh
+        run: |
+          Copy-Item src/trade_packet_bridge_v42.cpp src/trade_packet_bridge.cpp -Force
+          $p = 'src/trade_packet_test.cpp'
+          $s = Get-Content $p -Raw
+          $s = $s.Replace('TEST TRADE STATE V4 - CMD_TRADE_DATA 200053', 'TEST TRADE STATE V4.2 - OnReceivePacket(System.Byte[])')
+          $s = $s.Replace('V4: nghe trực tiếp LuaSystemManager.OnReceivePacket • chỉ lọc CMD_TRADE_DATA=200053', 'V4.2: hook đúng OnReceivePacket(System.Byte[]) • đọc raw packet thụ động')
+          $s = $s.Replace('Không gọi Lua/UI, không quét item, không OCR, không poll trạng thái game. data == -1 => TRADE_FINISHED.', 'Không gọi Lua/UI. Tìm raw CMD 200053 + -1; nếu chưa thấy vẫn hiển thị mẫu HEX để chốt framing.')
+          $s = $s.Replace('BẮT ĐẦU THEO DÕI V4', 'BẮT ĐẦU THEO DÕI V4.2')
+          $s = $s.Replace('WAIT • thực hiện giao dịch bình thường. V4 chỉ báo khi nhận 200053 và data=-1.', 'WAIT • V4.2 đang nghe byte[]. Hãy giao dịch; theo dõi V4.2 LIVE / RAW 200053 và last=HEX.')
+          Set-Content $p $s -Encoding UTF8
+
+      - name: Configure x64
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage V4.2 package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item build/Release/ThanLongTradePacketTest.exe package/ThanLongTradeStateTest.exe
+          Copy-Item build/Release/ThanLongTradePacketBridge.dll package/
+          Copy-Item TRADE_STATE_V42_RAW.md package/
+
+      - name: Upload V4.2 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThanLong-Trade-State-V4.2-RawByteArray
+          path: package/*
+          if-no-files-found: error
