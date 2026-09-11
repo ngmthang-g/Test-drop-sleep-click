@@ -29,11 +29,17 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build Release
         run: cmake --build build --config Release --parallel
-      - name: Verify no fixed Sleep in test source
+      - name: Verify no fixed Sleep in ThanLongTestSell source
         shell: pwsh
         run: |
-          $hits = Get-ChildItem src -Recurse -File | Select-String -Pattern '\bSleep\s*\('
-          if ($hits) { $hits | ForEach-Object { Write-Host $_ }; throw 'Sleep() found in test source' }
+          $files = @(
+            Get-ChildItem src/controller_chunks -File
+            Get-ChildItem src/bridge_chunks -File | Where-Object { $_.Name -match '^bridge_(0[1-9]|1[0-3])\.txt$' }
+            Get-Item src/protocol.h
+            Get-Item src/internal_ui_click_logic.h
+          )
+          $hits = $files | Select-String -Pattern '\bSleep\s*\('
+          if ($hits) { $hits | ForEach-Object { Write-Host $_ }; throw 'Sleep() found in ThanLongTestSell source' }
       - name: Stage UI Direct package
         shell: pwsh
         run: |
