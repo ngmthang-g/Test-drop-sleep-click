@@ -1,4 +1,4 @@
-name: Build TRADE STATE TEST
+name: Build TRADE STATE V4 PACKET
 
 on:
   workflow_dispatch:
@@ -14,16 +14,16 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build Release
         run: cmake --build build --config Release --parallel
-      - name: Stage Trade test package
+      - name: Stage Trade V4 packet test package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item build/Release/ThanLongTradeStateTest.exe package/
-          Copy-Item build/Release/ThanLongTradeStateBridge.dll package/ThanLongTestSellBridge.dll
-          Copy-Item TRADE_STATE_TEST.md package/
-      - name: Upload Trade test EXE package
+          Copy-Item build/Release/ThanLongTradePacketTest.exe package/ThanLongTradeStateTest.exe
+          Copy-Item build/Release/ThanLongTradePacketBridge.dll package/
+          Copy-Item TRADE_STATE_V4_PACKET.md package/
+      - name: Upload Trade V4 packet test EXE package
         uses: actions/upload-artifact@v4
         with:
-          name: ThanLong-Trade-State-Test
+          name: ThanLong-Trade-State-V4-Packet
           path: package/*
           if-no-files-found: error
