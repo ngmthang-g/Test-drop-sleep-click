@@ -37,7 +37,7 @@ foreach(PART
     file(APPEND "${GENERATED_BRIDGE}" "${PART_TEXT}")
 endforeach()
 
-# Trade-test bridge is deliberately separate from the production/test-sell bridge.
+# Trade-test bridge is deliberately separate from the test-sell bridge.
 # It shares the proven bridge core but replaces only the final Trade probe chunk.
 set(GENERATED_TRADE_BRIDGE "${GENERATED_DIR}/trade_bridge.cpp")
 file(WRITE "${GENERATED_TRADE_BRIDGE}" "")
@@ -54,7 +54,7 @@ foreach(PART
     src/bridge_chunks/bridge_10.txt
     src/bridge_chunks/bridge_11.txt
     src/bridge_chunks/bridge_12.txt
-    src/bridge_chunks/bridge_trade_13.txt)
+    src/bridge_chunks/bridge_trade_v3_13.txt)
     file(READ "${CMAKE_SOURCE_DIR}/${PART}" PART_TEXT)
     file(APPEND "${GENERATED_TRADE_BRIDGE}" "${PART_TEXT}")
 endforeach()
@@ -85,9 +85,8 @@ target_include_directories(ThanLongTestSell PRIVATE src)
 target_compile_definitions(ThanLongTestSell PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_link_libraries(ThanLongTestSell PRIVATE comctl32 user32 kernel32 gdi32 windowscodecs ole32)
 
-# Dedicated lightweight runtime proof for Trade lifecycle. Startup-safe controller
-# uses only core Win32 UI/runtime APIs; the dedicated bridge owns the V2 ExchangeID probe.
-add_executable(ThanLongTradeStateTest WIN32 src/trade_test_safe.cpp)
+# Dedicated Trade V3 runtime proof. Controller exposes the real probe detail live.
+add_executable(ThanLongTradeStateTest WIN32 src/trade_test_v3.cpp)
 target_include_directories(ThanLongTradeStateTest PRIVATE src)
 target_compile_definitions(ThanLongTradeStateTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_link_libraries(ThanLongTradeStateTest PRIVATE user32 kernel32 gdi32)
