@@ -58,12 +58,12 @@ target_include_directories(ThanLongTestSell PRIVATE src)
 target_compile_definitions(ThanLongTestSell PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_link_libraries(ThanLongTestSell PRIVATE comctl32 user32 kernel32 gdi32 windowscodecs ole32)
 
-# Dedicated lightweight runtime proof for Trade lifecycle. It shares the same
-# semantic bridge but does not scan bag items, OCR, or invoke trade actions.
-add_executable(ThanLongTradeStateTest WIN32 src/trade_test.cpp)
+# Dedicated lightweight runtime proof for Trade lifecycle. Startup-safe controller
+# uses only core Win32 UI/runtime APIs; bridge still owns the semantic Trade probe.
+add_executable(ThanLongTradeStateTest WIN32 src/trade_test_safe.cpp)
 target_include_directories(ThanLongTradeStateTest PRIVATE src)
 target_compile_definitions(ThanLongTradeStateTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
-target_link_libraries(ThanLongTradeStateTest PRIVATE comctl32 user32 kernel32)
+target_link_libraries(ThanLongTradeStateTest PRIVATE user32 kernel32 gdi32)
 
 add_custom_command(TARGET ThanLongTestSell POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
