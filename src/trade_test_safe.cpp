@@ -335,6 +335,7 @@ private:
         if (m == WM_NCCREATE) {
             auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
             self = static_cast<App*>(cs->lpCreateParams);
+            if (self) self->hwnd_ = h;
             SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         }
         return self ? self->Handle(m, w, l) : DefWindowProcW(h, m, w, l);
