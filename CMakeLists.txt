@@ -37,6 +37,28 @@ foreach(PART
     file(APPEND "${GENERATED_BRIDGE}" "${PART_TEXT}")
 endforeach()
 
+# Trade-test bridge is deliberately separate from the production/test-sell bridge.
+# It shares the proven bridge core but replaces only the final Trade probe chunk.
+set(GENERATED_TRADE_BRIDGE "${GENERATED_DIR}/trade_bridge.cpp")
+file(WRITE "${GENERATED_TRADE_BRIDGE}" "")
+foreach(PART
+    src/bridge_chunks/bridge_01.txt
+    src/bridge_chunks/bridge_02.txt
+    src/bridge_chunks/bridge_03.txt
+    src/bridge_chunks/bridge_04.txt
+    src/bridge_chunks/bridge_05.txt
+    src/bridge_chunks/bridge_06.txt
+    src/bridge_chunks/bridge_07.txt
+    src/bridge_chunks/bridge_08.txt
+    src/bridge_chunks/bridge_09.txt
+    src/bridge_chunks/bridge_10.txt
+    src/bridge_chunks/bridge_11.txt
+    src/bridge_chunks/bridge_12.txt
+    src/bridge_chunks/bridge_trade_13.txt)
+    file(READ "${CMAKE_SOURCE_DIR}/${PART}" PART_TEXT)
+    file(APPEND "${GENERATED_TRADE_BRIDGE}" "${PART_TEXT}")
+endforeach()
+
 set(GENERATED_CONTROLLER "${GENERATED_DIR}/controller.cpp")
 file(WRITE "${GENERATED_CONTROLLER}" "")
 foreach(PART
@@ -53,13 +75,18 @@ target_include_directories(ThanLongTestSellBridge PRIVATE src)
 target_compile_definitions(ThanLongTestSellBridge PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(ThanLongTestSellBridge PRIVATE user32 kernel32)
 
+add_library(ThanLongTradeStateBridge SHARED "${GENERATED_TRADE_BRIDGE}")
+target_include_directories(ThanLongTradeStateBridge PRIVATE src)
+target_compile_definitions(ThanLongTradeStateBridge PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(ThanLongTradeStateBridge PRIVATE user32 kernel32)
+
 add_executable(ThanLongTestSell WIN32 "${GENERATED_CONTROLLER}")
 target_include_directories(ThanLongTestSell PRIVATE src)
 target_compile_definitions(ThanLongTestSell PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 target_link_libraries(ThanLongTestSell PRIVATE comctl32 user32 kernel32 gdi32 windowscodecs ole32)
 
 # Dedicated lightweight runtime proof for Trade lifecycle. Startup-safe controller
-# uses only core Win32 UI/runtime APIs; bridge still owns the semantic Trade probe.
+# uses only core Win32 UI/runtime APIs; the dedicated bridge owns the V2 ExchangeID probe.
 add_executable(ThanLongTradeStateTest WIN32 src/trade_test_safe.cpp)
 target_include_directories(ThanLongTradeStateTest PRIVATE src)
 target_compile_definitions(ThanLongTradeStateTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
@@ -72,9 +99,11 @@ add_custom_command(TARGET ThanLongTestSell POST_BUILD
 
 if(MSVC)
     target_compile_options(ThanLongTestSellBridge PRIVATE /utf-8 /W4 /permissive- /O2)
+    target_compile_options(ThanLongTradeStateBridge PRIVATE /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTestSell PRIVATE /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTradeStateTest PRIVATE /FIstdlib.h /utf-8 /W4 /permissive- /O2)
     target_link_options(ThanLongTestSellBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
+    target_link_options(ThanLongTradeStateBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTestSell PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTradeStateTest PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
 endif()
