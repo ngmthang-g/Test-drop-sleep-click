@@ -12,7 +12,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Select V4.1 resolver bridge
         shell: pwsh
-        run: Copy-Item src/trade_packet_bridge_v41.cpp src/trade_packet_bridge.cpp -Force
+        run: |
+          Copy-Item src/trade_packet_bridge_v41.cpp src/trade_packet_bridge.cpp -Force
+          $p = 'src/trade_packet_bridge.cpp'
+          $text = Get-Content $p -Raw
+          $text = $text.Replace('#include <cstring>', "#include <cstring>`r`n#include <initializer_list>")
+          Set-Content -Path $p -Value $text -Encoding utf8
       - name: Configure x64
         run: cmake -S . -B build -A x64
       - name: Build Release
