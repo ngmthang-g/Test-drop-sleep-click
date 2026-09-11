@@ -6,7 +6,7 @@
 namespace cleanroute {
 
 constexpr std::uint32_t kMagic = 0x54534253u; // TSBS
-constexpr std::uint32_t kProtocolVersion = 0x00010000u;
+constexpr std::uint32_t kProtocolVersion = 0x00010001u;
 constexpr UINT kWakeMessage = WM_APP + 0x531;
 constexpr wchar_t kMappingPrefix[] = L"Local\\ThanLongTestSell_";
 
@@ -17,12 +17,21 @@ enum class Command : std::uint32_t {
     DragInternalPoint = 27,
     ClickItemSellAction = 28,
     ProbeItemSellAction = 29,
+    ProbeTradeState = 30,
 };
 
 enum class ActionResult : std::int32_t {
     None = 0,
     ActionInvoked = 1,
 };
+
+// ProbeTradeState resultCode bit flags. The only primary lifecycle signal is
+// FindUI("Trade") existence. ActiveInHierarchy/ExchangeID are diagnostics only.
+constexpr std::int32_t kTradeProbeFindUiOk = 1 << 0;
+constexpr std::int32_t kTradeProbeUiExists = 1 << 1;
+constexpr std::int32_t kTradeProbeActiveKnown = 1 << 2;
+constexpr std::int32_t kTradeProbeActive = 1 << 3;
+constexpr std::int32_t kTradeProbeExchangeIdKnown = 1 << 4;
 
 struct BagItemSnapshot {
     std::int64_t instanceID = 0;

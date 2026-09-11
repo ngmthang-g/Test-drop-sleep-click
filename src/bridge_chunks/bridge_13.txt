@@ -44,6 +44,77 @@ bool ProbeItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std:
 
 bool ClickItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;if(!found){response.value0=0;SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}if(!InvokeControl(controls[index],detail,cap))return false;response.value0=1;response.resultCode=static_cast<std::int32_t>(ActionResult::ActionInvoked);SetText(detail,cap,L"Đã thấy và callback dòng BÁN ngay trong cùng probe");return true;}
 
+// Lightweight semantic Trade watcher. This deliberately does not inspect bag items,
+// OCR text, or infer success/failure. Primary evidence is only whether the current
+// Lua/UI runtime still resolves GUI.FindUI("Trade"). Optional runtime members are
+// reported for diagnostics but never required to decide that the session closed.
+bool ProbeTradeState(Response& response, wchar_t* detail, std::size_t cap) {
+    if (!EnsureUiLua(true, detail, cap)) return false;
+
+    const MethodInfo* findUi = ExactMethod(g_ui.guiApi, "FindUI", 1, true, "System.String");
+    const wchar_t* source = L"FindUI";
+    if (!findUi) {
+        findUi = ExactMethod(g_ui.guiApi, "MainFindUI", 1, true, "System.String");
+        source = L"MainFindUI";
+    }
+    if (!findUi) {
+        SetText(detail, cap, L"Không resolve được LuaSystemAPI_GUI.FindUI/MainFindUI(System.String)");
+        return false;
+    }
+
+    Il2CppString* tradeName = g_api.string_new("Trade");
+    if (!tradeName) {
+        SetText(detail, cap, L"Không tạo được managed string 'Trade'");
+        return false;
+    }
+
+    Il2CppObject* trade = nullptr;
+    void* args[] = {&tradeName};
+    if (!InvokeObjectArgs(findUi, nullptr, args, trade, detail, cap)) return false;
+
+    response.resultCode = kTradeProbeFindUiOk;
+    response.value0 = trade ? 1 : 0;
+    response.value1 = -1;
+    if (!trade) {
+        SetText(detail, cap, source);
+        Append(detail, cap, L"('Trade') = null • session/UI không còn hiện diện");
+        return true;
+    }
+
+    response.resultCode |= kTradeProbeUiExists;
+    Il2CppClass* klass = g_api.object_get_class(trade);
+    if (klass) {
+        std::int32_t active = 0;
+        wchar_t ignored[128]{};
+        if (ScalarGetter(klass, "get_ActiveInHierarchy", trade, active, ignored, _countof(ignored))) {
+            response.resultCode |= kTradeProbeActiveKnown;
+            response.value1 = active ? 1 : 0;
+            if (active) response.resultCode |= kTradeProbeActive;
+        }
+
+        std::int64_t exchangeId = 0;
+        if (ReadScalarMember64(trade, klass, "ExchangeID", exchangeId)) {
+            response.resultCode |= kTradeProbeExchangeIdKnown;
+            response.value64_0 = exchangeId;
+        }
+    }
+
+    SetText(detail, cap, source);
+    Append(detail, cap, L"('Trade') = object");
+    if (response.resultCode & kTradeProbeActiveKnown) {
+        Append(detail, cap, response.value1 ? L" • Active=1" : L" • Active=0");
+    } else {
+        Append(detail, cap, L" • Active=?");
+    }
+    if (response.resultCode & kTradeProbeExchangeIdKnown) {
+        Append(detail, cap, L" • ExchangeID=");
+        AppendInt64(detail, cap, response.value64_0);
+    } else {
+        Append(detail, cap, L" • ExchangeID=NOT_EXPOSED");
+    }
+    return true;
+}
+
 bool EnsureShared() {
     if (g_shared) return true;
     wchar_t name[96]{}; MappingName(GetCurrentProcessId(), name, _countof(name));
@@ -81,6 +152,8 @@ void ProcessRequest() {
                 ok=ClickItemSellAction(r,detail,_countof(detail)); break;
             case Command::ProbeItemSellAction:
                 ok=ProbeItemSellAction(r,detail,_countof(detail)); break;
+            case Command::ProbeTradeState:
+                ok=ProbeTradeState(r,detail,_countof(detail)); break;
             default:
                 SetText(detail,_countof(detail),L"Command test không hợp lệ"); break;
         }
