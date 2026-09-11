@@ -14,14 +14,25 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # V4 packet observer uses MinHook only for one verified managed method detour.
-# The dependency is build-time only; the produced bridge DLL is self-contained.
+# MinHook v1.3.3 has no root CMakeLists, so FetchContent only populates the
+# sources and we build the four required x64 source files explicitly.
 include(FetchContent)
 FetchContent_Declare(
-    minhook
+    minhook_source
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
     GIT_TAG v1.3.3
     GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(minhook)
+FetchContent_MakeAvailable(minhook_source)
+
+add_library(minhook STATIC
+    "${minhook_source_SOURCE_DIR}/src/buffer.c"
+    "${minhook_source_SOURCE_DIR}/src/hook.c"
+    "${minhook_source_SOURCE_DIR}/src/trampoline.c"
+    "${minhook_source_SOURCE_DIR}/src/hde/hde64.c")
+target_include_directories(minhook
+    PUBLIC "${minhook_source_SOURCE_DIR}/include"
+    PRIVATE "${minhook_source_SOURCE_DIR}/src" "${minhook_source_SOURCE_DIR}/src/hde")
+target_compile_definitions(minhook PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 
 # Transport-only split. CMake joins each source byte-for-byte before compiling.
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -120,10 +131,10 @@ add_custom_command(TARGET ThanLongTestSell POST_BUILD
 if(MSVC)
     target_compile_options(ThanLongTestSellBridge PRIVATE /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTradeStateBridge PRIVATE /utf-8 /W4 /permissive- /O2)
-    target_compile_options(ThanLongTradePacketBridge PRIVATE /utf-8 /W4 /permissive- /O2)
+    target_compile_options(ThanLongTradePacketBridge PRIVATE /FIstdlib.h /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTestSell PRIVATE /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTradeStateTest PRIVATE /FIstdlib.h /utf-8 /W4 /permissive- /O2)
-    target_compile_options(ThanLongTradePacketTest PRIVATE /utf-8 /W4 /permissive- /O2)
+    target_compile_options(ThanLongTradePacketTest PRIVATE /FIstdlib.h /utf-8 /W4 /permissive- /O2)
     target_link_options(ThanLongTestSellBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTradeStateBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTradePacketBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
