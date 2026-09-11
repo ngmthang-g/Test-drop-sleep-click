@@ -1,0 +1,276 @@
+se L'ỹ': case L'ỵ': c=L'y'; break;
+            default: break;
+        }
+        if (std::iswalnum(c)) output.push_back(c);
+    }
+    return output;
+}
+
+bool HasAny(const std::wstring& s, std::initializer_list<const wchar_t*> needles) {
+    for (const wchar_t* n : needles) if (n && *n && s.find(n) != std::wstring::npos) return true;
+    return false;
+}
+
+int SellActionScore(UiControl& c) {
+    (void)ReadAncestors(c);
+    CollectDescendantLabels(c);
+    const std::wstring text=FoldKey(c.labels.text);
+    const std::wstring name=FoldKey(c.labels.name);
+    const std::wstring parents=FoldKey(c.labels.ancestors);
+    const std::wstring descendants=FoldKey(c.labels.descendants);
+    const std::wstring all=text+name+parents+descendants;
+    if (HasAny(all,{L"banvatpham",L"quicksell",L"banvatphamnhanh",L"tabsell",L"selltab",L"npcshop",L"shopitem"})) return 0;
+    if (text==L"ban" || name==L"ban") return 1000;
+    const bool popupContext=HasAny(parents,{L"item",L"tips",L"detail",L"popup",L"bag",L"inventory",L"package",L"equip"});
+    if (popupContext && HasAny(text+name+descendants,{L"buttonban",L"btnban",L"sellbutton",L"itemsellaction"})) return 850;
+    return 0;
+}
+
+bool FindSellAction(std::vector<UiControl>& controls, std::size_t& selectedIndex, bool& found,
+                    wchar_t* detail, std::size_t cap) {
+    found=false; selectedIndex=0;
+    if (!EnumerateControls(controls, detail, cap)) return false;
+    struct Candidate { std::size_t index; int score; };
+    std::vector<Candidate> candidates;
+    for (std::size_t i=0;i<controls.size();++i) { const int score=SellActionScore(controls[i]); if(score>0)candidates.push_back({i,score}); }
+    std::sort(candidates.begin(),candidates.end(),[&](const Candidate&a,const Candidate&b){if(a.score!=b.score)return a.score>b.score;return reinterpret_cast<std::uintptr_t>(controls[a.index].object)<reinterpret_cast<std::uintptr_t>(controls[b.index].object);});
+    if(candidates.empty()){SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}
+    if(candidates.size()>1&&candidates[0].score==candidates[1].score&&controls[candidates[0].index].object!=controls[candidates[1].index].object){SetText(detail,cap,L"Có nhiều dòng BÁN cùng mức tin cậy; fail-closed");return false;}
+    found=true;selectedIndex=candidates[0].index;return true;
+}
+
+bool ProbeItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;response.value0=found?1:0;if(found)SetText(detail,cap,L"Đã thấy đúng một dòng BÁN nội bộ");return true;}
+
+bool ClickItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;if(!found){response.value0=0;SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}if(!InvokeControl(controls[index],detail,cap))return false;response.value0=1;response.resultCode=static_cast<std::int32_t>(ActionResult::ActionInvoked);SetText(detail,cap,L"Đã thấy và callback dòng BÁN ngay trong cùng probe");return true;}
+
+bool ParseInt64Text(const std::wstring& text, std::int64_t& out) {
+    out = 0;
+    if (text.empty()) return false;
+    std::size_t i = 0;
+    bool negative = false;
+    if (text[i] == L'-') { negative = true; ++i; }
+    else if (text[i] == L'+') { ++i; }
+    if (i >= text.size()) return false;
+    std::uint64_t value = 0;
+    bool any = false;
+    for (; i < text.size(); ++i) {
+        const wchar_t c = text[i];
+        if (c < L'0' || c > L'9') break;
+        any = true;
+        const std::uint64_t digit = static_cast<std::uint64_t>(c - L'0');
+        if (value > (static_cast<std::uint64_t>(INT64_MAX) - digit) / 10u) return false;
+        value = value * 10u + digit;
+    }
+    if (!any) return false;
+    out = negative ? -static_cast<std::int64_t>(value) : static_cast<std::int64_t>(value);
+    return true;
+}
+
+bool ReadTradeMember64(Il2CppObject* object, const char* member, std::int64_t& value) {
+    value = 0;
+    if (!object || !member) return false;
+    Il2CppClass* klass = g_api.object_get_class(object);
+    if (!klass) return false;
+    if (ReadScalarMember64(object, klass, member, value)) return true;
+    std::wstring text;
+    return ReadUiMemberText(object, klass, member, text) && ParseInt64Text(text, value);
+}
+
+bool EnumerateManagedObjects(Il2CppObject* collection, std::vector<Il2CppObject*>& objects) {
+    objects.clear();
+    if (!collection) return false;
+    if (ReadManagedPointerArray(collection, objects, 512)) return true;
+    Il2CppClass* klass = g_api.object_get_class(collection);
+    if (!klass) return false;
+    wchar_t ignored[128]{};
+    std::int32_t count = 0;
+    if (ScalarGetter(klass, "get_Count", ManagedThis(collection), count, ignored, _countof(ignored)) && count >= 0 && count <= 512) {
+        const MethodInfo* getItem = ExactMethod(klass, "get_Item", 1, false, "System.Int32");
+        if (getItem) {
+            for (std::int32_t i = 0; i < count; ++i) {
+                std::int32_t index = i;
+                void* args[] = {&index};
+                Il2CppObject* item = nullptr;
+                wchar_t itemError[96]{};
+                if (!InvokeObjectArgs(getItem, ManagedThis(collection), args, item, itemError, _countof(itemError))) return false;
+                if (item) objects.push_back(item);
+            }
+            return true;
+        }
+    }
+    const MethodInfo* getEnumerator = FindMethod(klass, "GetEnumerator", 0);
+    if (!getEnumerator) return false;
+    Il2CppObject* enumerator = nullptr;
+    if (!InvokeObject(getEnumerator, ManagedThis(collection), enumerator, ignored, _countof(ignored)) || !enumerator) return false;
+    Il2CppClass* ec = g_api.object_get_class(enumerator);
+    if (!ec) return false;
+    const MethodInfo* moveNext = FindMethod(ec, "MoveNext", 0);
+    const MethodInfo* getCurrent = FindMethod(ec, "get_Current", 0);
+    if (!moveNext || !getCurrent) return false;
+    for (int guard = 0; guard < 512; ++guard) {
+        std::int64_t moved = 0;
+        if (!InvokeScalar(moveNext, ManagedThis(enumerator), moved, ignored, _countof(ignored))) return false;
+        if (!moved) return true;
+        Il2CppObject* current = nullptr;
+        if (!InvokeObject(getCurrent, ManagedThis(enumerator), current, ignored, _countof(ignored))) return false;
+        if (!current) continue;
+        objects.push_back(current);
+        Il2CppClass* cc = g_api.object_get_class(current);
+        const MethodInfo* getValue = cc ? FindMethod(cc, "get_Value", 0) : nullptr;
+        if (getValue) {
+            Il2CppObject* value = nullptr;
+            if (InvokeObject(getValue, ManagedThis(current), value, ignored, _countof(ignored)) && value)
+                objects.push_back(value);
+        }
+    }
+    return false;
+}
+
+bool IsActiveTradeObject(Il2CppObject* object, std::int64_t& exchangeId,
+                         std::int64_t& requestRoleId, std::int64_t& agreeRoleId) {
+    exchangeId = 0; requestRoleId = 0; agreeRoleId = 0;
+    if (!ReadTradeMember64(object, "ExchangeID", exchangeId) || exchangeId <= 0) return false;
+    (void)ReadTradeMember64(object, "RequestRoleID", requestRoleId);
+    (void)ReadTradeMember64(object, "AgreeRoleID", agreeRoleId);
+    return true;
+}
+
+// Trade V2: do not depend on the literal UI name. The shipped Trade.lua proves an
+// active session exposes ExchangeID and LoadData("-1") closes the session. We first
+// enumerate the live semantic UI/script objects through FindAllUIs() and look for a
+// positive ExchangeID. FindUI("Trade") remains only a fallback diagnostic path.
+bool ProbeTradeState(Response& response, wchar_t* detail, std::size_t cap) {
+    if (!EnsureUiLua(true, detail, cap)) return false;
+    response = {};
+    response.resultCode = kTradeProbeFindUiOk;
+    response.value0 = 0;
+    response.value1 = 0;
+
+    std::vector<Il2CppObject*> objects;
+    bool findAllOk = false;
+    const MethodInfo* findAll = ExactMethod(g_ui.guiApi, "FindAllUIs", 0, true);
+    const wchar_t* allSource = L"FindAllUIs";
+    if (!findAll) {
+        findAll = ExactMethod(g_ui.guiApi, "MainFindAllUIs", 0, true);
+        allSource = L"MainFindAllUIs";
+    }
+    if (findAll) {
+        Il2CppObject* all = nullptr;
+        wchar_t ignored[128]{};
+        if (InvokeObject(findAll, nullptr, all, ignored, _countof(ignored)) && all)
+            findAllOk = EnumerateManagedObjects(all, objects);
+    }
+
+    std::int64_t exchangeId = 0, requestRoleId = 0, agreeRoleId = 0;
+    for (Il2CppObject* object : objects) {
+        if (!IsActiveTradeObject(object, exchangeId, requestRoleId, agreeRoleId)) continue;
+        response.resultCode |= kTradeProbeUiExists | kTradeProbeActiveKnown |
+                               kTradeProbeActive | kTradeProbeExchangeIdKnown;
+        response.value0 = 1;
+        response.value1 = 1;
+        response.value64_0 = exchangeId;
+        response.value64_1 = requestRoleId ? requestRoleId : agreeRoleId;
+        SetText(detail, cap, allSource);
+        Append(detail, cap, L" • ExchangeID="); AppendInt64(detail, cap, exchangeId);
+        Append(detail, cap, L" • RequestRoleID="); AppendInt64(detail, cap, requestRoleId);
+        Append(detail, cap, L" • AgreeRoleID="); AppendInt64(detail, cap, agreeRoleId);
+        return true;
+    }
+
+    bool namedTradeObject = false;
+    const MethodInfo* findUi = ExactMethod(g_ui.guiApi, "FindUI", 1, true, "System.String");
+    const wchar_t* uiSource = L"FindUI";
+    if (!findUi) {
+        findUi = ExactMethod(g_ui.guiApi, "MainFindUI", 1, true, "System.String");
+        uiSource = L"MainFindUI";
+    }
+    if (findUi) {
+        Il2CppString* tradeName = g_api.string_new("Trade");
+        if (tradeName) {
+            Il2CppObject* trade = nullptr;
+            void* args[] = {&tradeName};
+            wchar_t ignored[128]{};
+            if (InvokeObjectArgs(findUi, nullptr, args, trade, ignored, _countof(ignored)) && trade) {
+                namedTradeObject = true;
+                if (IsActiveTradeObject(trade, exchangeId, requestRoleId, agreeRoleId)) {
+                    response.resultCode |= kTradeProbeUiExists | kTradeProbeActiveKnown |
+                                           kTradeProbeActive | kTradeProbeExchangeIdKnown;
+                    response.value0 = 1;
+                    response.value1 = 1;
+                    response.value64_0 = exchangeId;
+                    response.value64_1 = requestRoleId ? requestRoleId : agreeRoleId;
+                    SetText(detail, cap, uiSource);
+                    Append(detail, cap, L"('Trade') • ExchangeID="); AppendInt64(detail, cap, exchangeId);
+                    return true;
+                }
+            }
+        }
+    }
+
+    SetText(detail, cap, L"Trade V2 idle • ");
+    Append(detail, cap, allSource);
+    Append(detail, cap, findAllOk ? L" OK objects=" : L" unavailable objects=");
+    AppendInt(detail, cap, static_cast<int>(objects.size()));
+    Append(detail, cap, namedTradeObject ? L" • FindUI('Trade') object nhưng chưa có ExchangeID>0" : L" • FindUI('Trade') null");
+    return true;
+}
+
+bool EnsureShared() {
+    if (g_shared) return true;
+    wchar_t name[96]{}; MappingName(GetCurrentProcessId(), name, _countof(name));
+    g_mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
+    if (!g_mapping) return false;
+    g_shared = reinterpret_cast<SharedBlock*>(MapViewOfFile(g_mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedBlock)));
+    if (!g_shared || g_shared->magic != kMagic || g_shared->protocolVersion != kProtocolVersion ||
+        g_shared->targetPid != GetCurrentProcessId()) {
+        if (g_shared) UnmapViewOfFile(g_shared);
+        if (g_mapping) CloseHandle(g_mapping);
+        g_shared=nullptr; g_mapping=nullptr; return false;
+    }
+    InterlockedExchange(&g_shared->bridgeLoaded,1);
+    return true;
+}
+
+void ProcessRequest() {
+    if (!EnsureShared()) return;
+    const LONG seq=g_shared->requestSeq;
+    if (seq<=0 || seq==g_shared->completedSeq) return;
+    if (InterlockedCompareExchange(&g_shared->bridgeBusy,1,0)!=0) return;
+    Response r{}; wchar_t detail[512]{}; bool ok=false;
+    if (GetCurrentThreadId()!=g_shared->targetWindowThreadId) {
+        SetText(detail,_countof(detail),L"Sai callback thread; action bị chặn");
+    } else {
+        const Command cmd=static_cast<Command>(g_shared->request.command);
+        switch(cmd) {
+            case Command::ReadBagPage:
+                ok=ReadBagPage(g_shared->request.arg0,r,detail,_countof(detail)); break;
+            case Command::ClickInternalPointRawTest:
+                ok=ClickInternalPointRawTest(g_shared->request.arg0,g_shared->request.arg1,r,detail,_countof(detail)); break;
+            case Command::DragInternalPoint:
+                ok=DragInternalPoint(g_shared->request.arg0,g_shared->request.arg1,g_shared->request.arg2,r,detail,_countof(detail)); break;
+            case Command::ClickItemSellAction:
+                ok=ClickItemSellAction(r,detail,_countof(detail)); break;
+            case Command::ProbeItemSellAction:
+                ok=ProbeItemSellAction(r,detail,_countof(detail)); break;
+            case Command::ProbeTradeState:
+                ok=ProbeTradeState(r,detail,_countof(detail)); break;
+            default:
+                SetText(detail,_countof(detail),L"Command test không hợp lệ"); break;
+        }
+    }
+    r.ok=ok?1:0; SetText(r.detail,_countof(r.detail),detail); g_shared->response=r;
+    MemoryBarrier(); InterlockedExchange(&g_shared->completedSeq,seq); InterlockedExchange(&g_shared->bridgeBusy,0);
+}
+
+} // namespace
+
+extern "C" __declspec(dllexport) LRESULT CALLBACK TlcGetMessageHook(int code, WPARAM wParam, LPARAM lParam) {
+    (void)wParam;
+    if (code>=0 && lParam) {
+        const MSG* msg=reinterpret_cast<const MSG*>(lParam);
+        if (msg->message==kWakeMessage) ProcessRequest();
+    }
+    return CallNextHookEx(nullptr,code,wParam,lParam);
+}
+
+BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
