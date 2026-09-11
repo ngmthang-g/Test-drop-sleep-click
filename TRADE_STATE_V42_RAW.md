@@ -33,3 +33,5 @@ The first raw packet received changes the log to `V4.2 LIVE`. The status field c
 6. Save/screenshot the whole log and the status line.
 
 If V4.2 sees 200053, the log reports encoding, byte offset and a HEX window. If it does not see 200053 in raw bytes, the HEX sample still gives runtime evidence for the next parser step without calling any Lua/runtime function.
+
+Build marker: V4.2 workflow enabled.
