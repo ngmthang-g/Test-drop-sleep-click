@@ -44,6 +44,169 @@ bool ProbeItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std:
 
 bool ClickItemSellAction(Response& response,wchar_t*detail,std::size_t cap){std::vector<UiControl> controls;std::size_t index=0;bool found=false;if(!FindSellAction(controls,index,found,detail,cap))return false;if(!found){response.value0=0;SetText(detail,cap,L"Chưa thấy dòng BÁN nội bộ của popup item");return true;}if(!InvokeControl(controls[index],detail,cap))return false;response.value0=1;response.resultCode=static_cast<std::int32_t>(ActionResult::ActionInvoked);SetText(detail,cap,L"Đã thấy và callback dòng BÁN ngay trong cùng probe");return true;}
 
+
+const wchar_t* UiTestTargetName(UiTestTarget target) {
+    switch (target) {
+        case UiTestTarget::CloseItemPopup: return L"X popup item";
+        case UiTestTarget::CloseBag: return L"X Tay nải";
+        case UiTestTarget::CloseTrade: return L"X Giao dịch";
+        case UiTestTarget::TradeConfirm: return L"Xác nhận giao dịch";
+        case UiTestTarget::TradeTabEquip: return L"Tab Trang bị";
+        case UiTestTarget::ItemPutOn: return L"Đặt lên";
+        case UiTestTarget::TradeLock: return L"Khóa";
+        case UiTestTarget::TradeUnlock: return L"Bỏ khóa";
+        case UiTestTarget::TradeSubmit: return L"Giao dịch";
+        case UiTestTarget::ItemDrop: return L"Vứt bỏ";
+        case UiTestTarget::ItemSell: return L"BÁN";
+        default: return L"UNKNOWN";
+    }
+}
+
+bool KeyEqualsAny(const std::wstring& key, std::initializer_list<const wchar_t*> values) {
+    for (const wchar_t* v : values) if (v && key == v) return true;
+    return false;
+}
+
+int UiTestScore(UiTestTarget target, UiControl& c) {
+    (void)ReadAncestors(c);
+    CollectDescendantLabels(c);
+    const std::wstring text = FoldKey(c.labels.text);
+    const std::wstring name = FoldKey(c.labels.name);
+    const std::wstring handler = FoldKey(c.labels.handler);
+    const std::wstring tag = FoldKey(c.tag);
+    const std::wstring parents = FoldKey(c.labels.ancestors);
+    const std::wstring descendants = FoldKey(c.labels.descendants);
+    const std::wstring visible = text + name + descendants;
+    const std::wstring all = visible + handler + tag + parents;
+
+    const bool tradeCtx = HasAny(parents + name, {L"trade", L"exchange", L"giaodich"});
+    const bool bagCtx = HasAny(parents + name, {L"roleinfo", L"bag", L"package", L"inventory", L"tuido"});
+    const bool itemCtx = HasAny(parents + name, {L"item", L"tips", L"tip", L"detail", L"popup", L"equipinfo", L"iteminfo"});
+    const bool popupCtx = HasAny(parents + name, {L"tips", L"tip", L"detail", L"popup", L"dialog", L"message", L"notice"});
+    const bool closeMarker = KeyEqualsAny(text, {L"x", L"close"}) ||
+        HasAny(name + handler + descendants, {L"close", L"btnclose", L"buttonclose", L"closebutton", L"exit", L"quit"});
+
+    switch (target) {
+        case UiTestTarget::CloseItemPopup:
+            if (!closeMarker) return 0;
+            if (itemCtx && popupCtx) return 1200;
+            if (itemCtx && !bagCtx && !tradeCtx) return 950;
+            return 0;
+        case UiTestTarget::CloseBag:
+            return closeMarker && bagCtx && !tradeCtx ? 1150 : 0;
+        case UiTestTarget::CloseTrade:
+            return closeMarker && tradeCtx ? 1200 : 0;
+        case UiTestTarget::TradeConfirm: {
+            const bool label = KeyEqualsAny(text, {L"xacnhan", L"dongy", L"confirm"}) ||
+                KeyEqualsAny(name, {L"xacnhan", L"confirm"}) ||
+                HasAny(descendants, {L"xacnhan", L"dongy"});
+            if (!label) return 0;
+            if (tradeCtx || HasAny(all, {L"trade", L"exchange", L"giaodich", L"request"})) return 1200;
+            return popupCtx ? 900 : 700;
+        }
+        case UiTestTarget::TradeTabEquip: {
+            const bool label = KeyEqualsAny(text, {L"trangbi", L"equip"}) || KeyEqualsAny(name, {L"trangbi", L"equip"}) ||
+                HasAny(descendants, {L"trangbi"});
+            return label && tradeCtx ? 1200 : 0;
+        }
+        case UiTestTarget::ItemPutOn: {
+            const bool label = KeyEqualsAny(text, {L"datlen", L"puton"}) || KeyEqualsAny(name, {L"datlen", L"puton"}) ||
+                HasAny(descendants, {L"datlen"});
+            return label && (itemCtx || bagCtx) ? 1150 : 0;
+        }
+        case UiTestTarget::TradeLock: {
+            const bool unlock = KeyEqualsAny(text, {L"bokhoa", L"unlock"}) || HasAny(descendants, {L"bokhoa"});
+            const bool label = KeyEqualsAny(text, {L"khoa", L"lock"}) || KeyEqualsAny(name, {L"khoa", L"lock"}) || HasAny(descendants, {L"khoa"});
+            return label && !unlock && tradeCtx ? 1200 : 0;
+        }
+        case UiTestTarget::TradeUnlock: {
+            const bool label = KeyEqualsAny(text, {L"bokhoa", L"unlock"}) || KeyEqualsAny(name, {L"bokhoa", L"unlock"}) || HasAny(descendants, {L"bokhoa"});
+            return label && tradeCtx ? 1200 : 0;
+        }
+        case UiTestTarget::TradeSubmit: {
+            const bool label = KeyEqualsAny(text, {L"giaodich", L"trade"}) || KeyEqualsAny(name, {L"giaodich", L"trade"}) || HasAny(descendants, {L"giaodich"});
+            return label && tradeCtx ? 1200 : 0;
+        }
+        case UiTestTarget::ItemDrop: {
+            const bool label = KeyEqualsAny(text, {L"vutbo", L"drop", L"discard"}) || KeyEqualsAny(name, {L"vutbo", L"drop", L"discard"}) || HasAny(descendants, {L"vutbo"});
+            return label && (itemCtx || bagCtx) ? 1150 : 0;
+        }
+        case UiTestTarget::ItemSell:
+            return SellActionScore(c);
+        default:
+            return 0;
+    }
+}
+
+void AppendFingerprint(const UiControl& c, wchar_t* detail, std::size_t cap) {
+    Append(detail, cap, L" • Name="); Append(detail, cap, c.labels.name.c_str());
+    Append(detail, cap, L" • Text="); Append(detail, cap, c.labels.text.c_str());
+    Append(detail, cap, L" • Handler="); Append(detail, cap, c.labels.handler.c_str());
+    Append(detail, cap, L" • Ancestors="); Append(detail, cap, c.labels.ancestors.c_str());
+}
+
+bool FindUiTestTarget(UiTestTarget target, std::vector<UiControl>& controls, std::size_t& selectedIndex,
+                      int& candidateCount, int& selectedScore, bool& found,
+                      wchar_t* detail, std::size_t cap) {
+    controls.clear(); selectedIndex = 0; candidateCount = 0; selectedScore = 0; found = false;
+    if (target < UiTestTarget::CloseItemPopup || target > UiTestTarget::ItemSell) {
+        SetText(detail, cap, L"TEST UI target không hợp lệ"); return false;
+    }
+    if (!EnumerateControls(controls, detail, cap)) return false;
+    struct Candidate { std::size_t index; int score; };
+    std::vector<Candidate> candidates;
+    for (std::size_t i = 0; i < controls.size(); ++i) {
+        const int score = UiTestScore(target, controls[i]);
+        if (score > 0) candidates.push_back({i, score});
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](const Candidate& a, const Candidate& b) {
+        if (a.score != b.score) return a.score > b.score;
+        return reinterpret_cast<std::uintptr_t>(controls[a.index].object) < reinterpret_cast<std::uintptr_t>(controls[b.index].object);
+    });
+    candidateCount = static_cast<int>(candidates.size());
+    if (candidates.empty()) {
+        SetText(detail, cap, UiTestTargetName(target)); Append(detail, cap, L" • NOT FOUND"); return true;
+    }
+    if (candidates.size() > 1 && candidates[0].score == candidates[1].score &&
+        controls[candidates[0].index].object != controls[candidates[1].index].object) {
+        SetText(detail, cap, UiTestTargetName(target)); Append(detail, cap, L" • AMBIGUOUS • candidates=");
+        AppendInt(detail, cap, candidateCount); Append(detail, cap, L" • topScore="); AppendInt(detail, cap, candidates[0].score);
+        return false;
+    }
+    selectedIndex = candidates[0].index;
+    selectedScore = candidates[0].score;
+    found = true;
+    return true;
+}
+
+bool ProbeUiTestTarget(UiTestTarget target, Response& response, wchar_t* detail, std::size_t cap) {
+    std::vector<UiControl> controls; std::size_t index = 0; int count = 0, score = 0; bool found = false;
+    if (!FindUiTestTarget(target, controls, index, count, score, found, detail, cap)) return false;
+    response.value0 = found ? 1 : 0; response.value1 = count; response.value64_0 = score;
+    if (!found) return true;
+    SetText(detail, cap, UiTestTargetName(target)); Append(detail, cap, L" • FOUND • candidates="); AppendInt(detail, cap, count);
+    Append(detail, cap, L" • score="); AppendInt(detail, cap, score); AppendFingerprint(controls[index], detail, cap);
+    return true;
+}
+
+bool InvokeUiTestTarget(UiTestTarget target, Response& response, wchar_t* detail, std::size_t cap) {
+    std::vector<UiControl> controls; std::size_t index = 0; int count = 0, score = 0; bool found = false;
+    if (!FindUiTestTarget(target, controls, index, count, score, found, detail, cap)) return false;
+    response.value0 = found ? 1 : 0; response.value1 = count; response.value64_0 = score;
+    if (!found) return true;
+    UiControl& selected = controls[index];
+    std::wstring name = selected.labels.name, text = selected.labels.text, handler = selected.labels.handler, ancestors = selected.labels.ancestors;
+    if (!InvokeControl(selected, detail, cap)) return false;
+    response.resultCode = static_cast<std::int32_t>(ActionResult::ActionInvoked);
+    SetText(detail, cap, UiTestTargetName(target)); Append(detail, cap, L" • DIRECT INVOKED • candidates="); AppendInt(detail, cap, count);
+    Append(detail, cap, L" • score="); AppendInt(detail, cap, score);
+    Append(detail, cap, L" • Name="); Append(detail, cap, name.c_str());
+    Append(detail, cap, L" • Text="); Append(detail, cap, text.c_str());
+    Append(detail, cap, L" • Handler="); Append(detail, cap, handler.c_str());
+    Append(detail, cap, L" • Ancestors="); Append(detail, cap, ancestors.c_str());
+    return true;
+}
+
 // Lightweight semantic Trade watcher. This deliberately does not inspect bag items,
 // OCR text, or infer success/failure. Primary evidence is only whether the current
 // Lua/UI runtime still resolves GUI.FindUI("Trade"). Optional runtime members are
@@ -154,6 +317,10 @@ void ProcessRequest() {
                 ok=ProbeItemSellAction(r,detail,_countof(detail)); break;
             case Command::ProbeTradeState:
                 ok=ProbeTradeState(r,detail,_countof(detail)); break;
+            case Command::ProbeUiTestTarget:
+                ok=ProbeUiTestTarget(static_cast<UiTestTarget>(g_shared->request.arg0),r,detail,_countof(detail)); break;
+            case Command::InvokeUiTestTarget:
+                ok=InvokeUiTestTarget(static_cast<UiTestTarget>(g_shared->request.arg0),r,detail,_countof(detail)); break;
             default:
                 SetText(detail,_countof(detail),L"Command test không hợp lệ"); break;
         }

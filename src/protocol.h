@@ -6,7 +6,7 @@
 namespace cleanroute {
 
 constexpr std::uint32_t kMagic = 0x54534253u; // TSBS
-constexpr std::uint32_t kProtocolVersion = 0x00010001u;
+constexpr std::uint32_t kProtocolVersion = 0x00010002u;
 constexpr UINT kWakeMessage = WM_APP + 0x531;
 constexpr wchar_t kMappingPrefix[] = L"Local\\ThanLongTestSell_";
 
@@ -18,6 +18,22 @@ enum class Command : std::uint32_t {
     ClickItemSellAction = 28,
     ProbeItemSellAction = 29,
     ProbeTradeState = 30,
+    ProbeUiTestTarget = 31,
+    InvokeUiTestTarget = 32,
+};
+
+enum class UiTestTarget : std::int32_t {
+    CloseItemPopup = 1,
+    CloseBag = 2,
+    CloseTrade = 3,
+    TradeConfirm = 4,
+    TradeTabEquip = 5,
+    ItemPutOn = 6,
+    TradeLock = 7,
+    TradeUnlock = 8,
+    TradeSubmit = 9,
+    ItemDrop = 10,
+    ItemSell = 11,
 };
 
 enum class ActionResult : std::int32_t {

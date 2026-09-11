@@ -46,9 +46,14 @@ bool ReadBasicControl(Il2CppObject* object, Il2CppClass* klass, UiKind kind,
     output.klass = klass;
     output.kind = kind;
     (void)ReadUiString(object, klass, "Name", output.labels.name);
-    if (kind != UiKind::Rect) (void)ReadUiString(object, klass, "Text", output.labels.text);
-    if (kind == UiKind::Rect)
+    (void)ReadUiString(object, klass, "Tag", output.tag);
+    if (kind != UiKind::Rect) {
+        (void)ReadUiString(object, klass, "Text", output.labels.text);
+        if (!ReadUiString(object, klass, "ClickHandler", output.labels.handler))
+            (void)ReadUiString(object, klass, "PointerClickHandler", output.labels.handler);
+    } else {
         (void)ReadUiString(object, klass, "PointerClickHandler", output.labels.handler);
+    }
     return true;
 }
 

@@ -10,7 +10,7 @@ public:
         INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
         WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTestSellWnd";
         RegisterClassExW(&wc);
-        hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,790,600,nullptr,nullptr,inst,this);
+        hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,1040,740,nullptr,nullptr,inst,this);
         if(!hwnd_){const DWORD e=GetLastError();wchar_t msg[256]{};swprintf_s(msg,L"Không tạo được cửa sổ. GetLastError=%lu",static_cast<unsigned long>(e));MessageBoxW(nullptr,msg,L"ThanLongTestSell startup error",MB_OK|MB_ICONERROR);return 1;}
         BuildUi();
         // Hiện UI trước mọi scan/config nặng: double-click phải thấy cửa sổ ngay.
@@ -21,10 +21,65 @@ public:
         MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}cancel_=true;if(worker_.joinable())worker_.join();return (int)msg.wParam;
     }
 private:
-    HINSTANCE inst_=nullptr;HWND hwnd_=nullptr,clients_=nullptr,status_=nullptr,log_=nullptr;std::vector<GameClient> games_;ScanConfig cfg_{};EquipPointDb db_{};std::thread worker_;std::atomic<bool> running_{false},cancel_{false};std::mutex logMu_;
+    HINSTANCE inst_=nullptr;HWND hwnd_=nullptr,clients_=nullptr,status_=nullptr,log_=nullptr,tab_=nullptr;std::vector<HWND> sellPageControls_,uiTestControls_;std::vector<GameClient> games_;ScanConfig cfg_{};EquipPointDb db_{};std::thread worker_;std::atomic<bool> running_{false},cancel_{false};std::mutex logMu_;
+    static constexpr int IDC_TAB=200;
+    static constexpr int IDC_UI_PROBE_BASE=300;
+    static constexpr int IDC_UI_DIRECT_BASE=400;
+    static constexpr int kUiTargetCount=11;
 
     static LRESULT CALLBACK WndProc(HWND h,UINT m,WPARAM w,LPARAM l){App*self=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));if(m==WM_NCCREATE){auto*cs=reinterpret_cast<CREATESTRUCTW*>(l);self=static_cast<App*>(cs->lpCreateParams);SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)self);}if(self)return self->Handle(m,w,l);return DefWindowProcW(h,m,w,l);}
-    void BuildUi(){HFONT f=(HFONT)GetStockObject(DEFAULT_GUI_FONT);auto mk=[&](const wchar_t*cls,const wchar_t*txt,DWORD st,int x,int y,int w,int h,int id){HWND z=CreateWindowExW(0,cls,txt,WS_CHILD|WS_VISIBLE|st,x,y,w,h,hwnd_,(HMENU)(INT_PTR)id,inst_,nullptr);if(z)SendMessageW(z,WM_SETFONT,(WPARAM)f,TRUE);return z;};mk(L"STATIC",L"CLIENT (tự quét GameAssembly.dll):",SS_LEFT,16,14,300,22,0);clients_=mk(L"LISTBOX",L"",WS_BORDER|WS_VSCROLL|LBS_NOTIFY,16,38,744,132,IDC_CLIENTS);mk(L"BUTTON",L"1. SCAN ẢNH BÁN",BS_AUTORADIOBUTTON|WS_GROUP,18,184,180,26,IDC_MODE_IMAGE);mk(L"BUTTON",L"2. DÒNG BÁN NỘI BỘ",BS_AUTORADIOBUTTON,218,184,220,26,IDC_MODE_INTERNAL);CheckRadioButton(hwnd_,IDC_MODE_IMAGE,IDC_MODE_INTERNAL,IDC_MODE_INTERNAL);mk(L"BUTTON",L"TEST BÁN ĐỒ",BS_DEFPUSHBUTTON,505,180,255,42,IDC_TEST_SELL);status_=mk(L"STATIC",L"Sẵn sàng",SS_LEFT|SS_CENTERIMAGE|WS_BORDER,16,232,744,34,IDC_STATUS);log_=mk(L"EDIT",L"",WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY,16,278,744,264,IDC_LOG);}
+    static const wchar_t* UiTargetLabel(UiTestTarget target){
+        switch(target){
+            case UiTestTarget::CloseItemPopup:return L"X popup item";
+            case UiTestTarget::CloseBag:return L"X Tay nải";
+            case UiTestTarget::CloseTrade:return L"X Giao dịch";
+            case UiTestTarget::TradeConfirm:return L"Xác nhận giao dịch";
+            case UiTestTarget::TradeTabEquip:return L"Tab Trang bị";
+            case UiTestTarget::ItemPutOn:return L"Đặt lên";
+            case UiTestTarget::TradeLock:return L"Khóa";
+            case UiTestTarget::TradeUnlock:return L"Bỏ khóa";
+            case UiTestTarget::TradeSubmit:return L"Giao dịch";
+            case UiTestTarget::ItemDrop:return L"Vứt bỏ";
+            case UiTestTarget::ItemSell:return L"BÁN";
+            default:return L"UNKNOWN";
+        }
+    }
+    void ShowPage(int page){
+        const bool sell=page==0;
+        for(HWND h:sellPageControls_)if(h)ShowWindow(h,sell?SW_SHOW:SW_HIDE);
+        for(HWND h:uiTestControls_)if(h)ShowWindow(h,sell?SW_HIDE:SW_SHOW);
+    }
+    void BuildUi(){
+        HFONT f=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        auto mk=[&](const wchar_t*cls,const wchar_t*txt,DWORD st,int x,int y,int w,int h,int id){HWND z=CreateWindowExW(0,cls,txt,WS_CHILD|WS_VISIBLE|st,x,y,w,h,hwnd_,(HMENU)(INT_PTR)id,inst_,nullptr);if(z)SendMessageW(z,WM_SETFONT,(WPARAM)f,TRUE);return z;};
+        mk(L"STATIC",L"CLIENT (tự quét GameAssembly.dll):",SS_LEFT,16,14,300,22,0);
+        clients_=mk(L"LISTBOX",L"",WS_BORDER|WS_VSCROLL|LBS_NOTIFY,16,38,1000,126,IDC_CLIENTS);
+        tab_=mk(WC_TABCONTROLW,L"",WS_CLIPSIBLINGS|WS_TABSTOP,16,174,1000,332,IDC_TAB);
+        TCITEMW ti{};ti.mask=TCIF_TEXT;ti.pszText=const_cast<wchar_t*>(L"TEST BÁN ĐỒ");TabCtrl_InsertItem(tab_,0,&ti);ti.pszText=const_cast<wchar_t*>(L"TEST UI DIRECT");TabCtrl_InsertItem(tab_,1,&ti);
+        sellPageControls_.push_back(mk(L"BUTTON",L"1. SCAN ẢNH BÁN",BS_AUTORADIOBUTTON|WS_GROUP,38,218,180,26,IDC_MODE_IMAGE));
+        sellPageControls_.push_back(mk(L"BUTTON",L"2. DÒNG BÁN NỘI BỘ",BS_AUTORADIOBUTTON,238,218,220,26,IDC_MODE_INTERNAL));
+        CheckRadioButton(hwnd_,IDC_MODE_IMAGE,IDC_MODE_INTERNAL,IDC_MODE_INTERNAL);
+        sellPageControls_.push_back(mk(L"BUTTON",L"TEST BÁN ĐỒ",BS_DEFPUSHBUTTON,735,212,255,42,IDC_TEST_SELL));
+        for(int i=0;i<kUiTargetCount;++i){
+            const UiTestTarget target=static_cast<UiTestTarget>(i+1);const int y=207+i*26;
+            uiTestControls_.push_back(mk(L"STATIC",UiTargetLabel(target),SS_LEFT|SS_CENTERIMAGE,38,y,250,23,0));
+            uiTestControls_.push_back(mk(L"BUTTON",L"NHẬN DIỆN",BS_PUSHBUTTON,300,y,150,23,IDC_UI_PROBE_BASE+i));
+            uiTestControls_.push_back(mk(L"BUTTON",L"TEST DIRECT",BS_PUSHBUTTON,462,y,150,23,IDC_UI_DIRECT_BASE+i));
+        }
+        status_=mk(L"STATIC",L"Sẵn sàng",SS_LEFT|SS_CENTERIMAGE|WS_BORDER,16,516,1000,34,IDC_STATUS);
+        log_=mk(L"EDIT",L"",WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY,16,560,1000,132,IDC_LOG);
+        TabCtrl_SetCurSel(tab_,0);ShowPage(0);
+    }
+    void RunUiDirectTest(UiTestTarget target,bool invoke){
+        if(running_){Status(L"Đang chạy TEST BÁN ĐỒ; chờ hoàn tất trước khi TEST UI");return;}
+        GameClient g{};if(!SelectedGame(g)){Status(L"Không có client được chọn");return;}
+        BridgeClient b;std::wstring err;if(!b.Attach(g,err)){Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" FAIL • "+err);Status(L"UI TEST FAIL");return;}
+        Response r{};const Command cmd=invoke?Command::InvokeUiTestTarget:Command::ProbeUiTestTarget;
+        if(!b.Call(cmd,static_cast<int>(target),0,0,r,err,1400)){Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" FAIL • "+err);Status(L"UI TEST FAIL");return;}
+        std::wstring state=r.value0?(invoke&&r.resultCode==static_cast<std::int32_t>(ActionResult::ActionInvoked)?L"DIRECT INVOKED":L"FOUND"):L"NOT FOUND";
+        Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" • "+state+L" • candidates="+std::to_wstring(r.value1)+L" • "+r.detail);
+        Status(std::wstring(L"TEST UI • ")+UiTargetLabel(target)+L" • "+state);
+    }
     void LoadConfig(){std::wstring d;bool loaded=false;wchar_t local[4096]{};const DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",local,_countof(local));if(n>0&&n<_countof(local)){const std::wstring old=(std::filesystem::path(local)/L"ThanLongCleanRoute"/L"WeaponScan.auto.tlscan").wstring();loaded=LoadTlScan(old,cfg_,d);if(loaded)Log(L"CONFIG 42: dùng trực tiếp cấu hình 9.9 • "+d);}if(!loaded){const std::wstring tl=ExeDir()+L"\\ThanLong_WeaponScan.tlscan";loaded=LoadTlScan(tl,cfg_,d);}if(!loaded){const std::wstring alt=ExeDir()+L"\\test_sell.tlscan";loaded=LoadTlScan(alt,cfg_,d);}if(!loaded)Log(L"CONFIG 42 FAIL: "+d);else if(n==0)Log(L"CONFIG 42: "+d);LoadSellIni(cfg_);std::string err;if(!db_.LoadCsv({},&err))Log(L"EquipPoint DB FAIL");else Log(L"EquipPoint DB PASS (embedded 9.9): "+std::to_wstring(db_.Size())+L" dòng");}
     void Log(const std::wstring&s){std::lock_guard<std::mutex>lk(logMu_);if(!log_)return;SYSTEMTIME t{};GetLocalTime(&t);wchar_t head[32]{};swprintf_s(head,L"[%02u:%02u:%02u] ",t.wHour,t.wMinute,t.wSecond);std::wstring line=head+s+L"\r\n";const int n=GetWindowTextLengthW(log_);SendMessageW(log_,EM_SETSEL,n,n);SendMessageW(log_,EM_REPLACESEL,FALSE,(LPARAM)line.c_str());}
     void Status(const std::wstring&s){if(status_)SetWindowTextW(status_,s.c_str());}
