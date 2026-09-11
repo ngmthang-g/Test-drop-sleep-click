@@ -73,7 +73,7 @@ add_custom_command(TARGET ThanLongTestSell POST_BUILD
 if(MSVC)
     target_compile_options(ThanLongTestSellBridge PRIVATE /utf-8 /W4 /permissive- /O2)
     target_compile_options(ThanLongTestSell PRIVATE /utf-8 /W4 /permissive- /O2)
-    target_compile_options(ThanLongTradeStateTest PRIVATE /utf-8 /W4 /permissive- /O2)
+    target_compile_options(ThanLongTradeStateTest PRIVATE /FIstdlib.h /utf-8 /W4 /permissive- /O2)
     target_link_options(ThanLongTestSellBridge PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTestSell PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
     target_link_options(ThanLongTradeStateTest PRIVATE /OPT:REF /OPT:ICF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
