@@ -66,6 +66,26 @@ def test_switch_targets_fallback_to_wide_runtime_scan_and_promote_callable_paren
     assert "ReadSkillBarSwitchStateLive" in text
 
 
+
+
+def test_switch_fallback_walks_descendant_graph_for_exact_runtime_nodes():
+    text = read("src/bridge_chunks/bridge_13.txt")
+    for token in [
+        "ScanSkillBarDescendantGraph",
+        "ReadUiChildrenForSwitchScan",
+        "FindSwitchTargetFromDescendantGraph",
+        "ReadSkillBarSwitchStateFromDescendantGraph",
+        "graphVisited=",
+        "switchNodes=",
+        "toggleFirstNodes=",
+        "toggleSecondNodes=",
+    ]:
+        assert token in text
+    # The exact switch/toggle nodes may exist only below a registered UIObject root.
+    assert 'get_CoreChildren' in text and 'get_Children' in text
+    assert 'buttonoriginalswitchsite' in text
+    assert 'togglefirsttab' in text and 'togglesecondtab' in text
+
 def test_controller_has_separate_test_ui_tab_and_all_target_rows():
     text = read("src/controller_chunks/controller_03.txt") + read("src/controller_chunks/controller_04.txt")
     assert "TEST UI DIRECT" in text
