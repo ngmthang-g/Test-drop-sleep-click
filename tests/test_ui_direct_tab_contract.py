@@ -50,3 +50,13 @@ def test_existing_sell_flow_remains_present():
     assert "TEST BÁN ĐỒ" in read("src/controller_chunks/controller_03.txt")
     assert "RunTest" in text
     assert "ClickItemSellAction" in text
+
+
+def test_window_creation_dispatches_with_live_hwnd():
+    wndproc = read("src/controller_chunks/controller_03.txt")
+    handler = read("src/controller_chunks/controller_04.txt")
+    # During WM_NCCREATE, App::hwnd_ has not yet received CreateWindowExW's return value.
+    # The live HWND supplied by Windows must therefore travel through the dispatcher.
+    assert "self->Handle(h,m,w,l)" in wndproc
+    assert "LRESULT Handle(HWND h,UINT m,WPARAM w,LPARAM l)" in handler
+    assert "return DefWindowProcW(h,m,w,l);" in handler
