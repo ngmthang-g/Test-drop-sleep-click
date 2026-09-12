@@ -49,18 +49,36 @@ jobs:
           )
           $hits = $files | Select-String -Pattern '\bSleep\s*\('
           if ($hits) { $hits | ForEach-Object { Write-Host $_ }; throw 'Sleep() found in ThanLongTestSell source' }
-      - name: Stage package
+      - name: Stage runtime and source packages
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path package | Out-Null
+          New-Item -ItemType Directory -Force -Path package,runtime_stage,source_stage | Out-Null
+
           Copy-Item build/Release/ThanLongTestSell.exe package/
           Copy-Item build/Release/ThanLongTestSellBridge.dll package/
           Copy-Item build/Release/test_sell.ini package/
           Copy-Item README.md package/
           Copy-Item VERSION_REPORT.md package/
-      - name: Upload EXE package
+
+          Copy-Item build/Release/ThanLongTestSell.exe runtime_stage/
+          Copy-Item build/Release/ThanLongTestSellBridge.dll runtime_stage/
+          Copy-Item build/Release/test_sell.ini runtime_stage/
+          Copy-Item README.md runtime_stage/
+          Copy-Item VERSION_REPORT.md runtime_stage/
+          Compress-Archive -Path runtime_stage/* -DestinationPath package/ThanLong-Test-UI-DIRECT-3Icons-startup-fixed-win-x64.zip -Force
+
+          Copy-Item CMakeLists.txt source_stage/
+          Copy-Item README.md source_stage/
+          Copy-Item VERSION_REPORT.md source_stage/
+          Copy-Item test_sell.ini source_stage/
+          Copy-Item src source_stage/src -Recurse
+          Copy-Item tests source_stage/tests -Recurse
+          New-Item -ItemType Directory -Force -Path source_stage/.github/workflows | Out-Null
+          Copy-Item .github/workflows/build-test-sell.yml source_stage/.github/workflows/
+          Compress-Archive -Path source_stage/* -DestinationPath package/ThanLong-Test-UI-DIRECT-3Icons-startup-fixed-source.zip -Force
+      - name: Upload EXE and source package
         uses: actions/upload-artifact@v4
         with:
-          name: ThanLong-Test-Sell-NoSleep-UI-Direct-Test
+          name: ThanLong-Test-UI-DIRECT-3Icons-StartupFixed
           path: package/*
           if-no-files-found: error
