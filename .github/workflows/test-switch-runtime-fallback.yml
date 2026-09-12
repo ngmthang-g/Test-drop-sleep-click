@@ -1,0 +1,51 @@
+name: Test switch runtime fallback
+
+on:
+  push:
+    branches: [ fix/switch-runtime-fallback ]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: UI direct source contract
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_ui_direct_tab_contract.py
+      - name: Configure x64
+        run: cmake -S . -B build -A x64
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+      - name: Smoke test main window startup
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'build/Release/ThanLongTestSell.exe'
+          $p = Start-Process -FilePath $exe -PassThru
+          try {
+            $idle = $p.WaitForInputIdle(5000)
+            $p.Refresh()
+            if ($p.HasExited) { throw "EXE exited during startup with code $($p.ExitCode)" }
+            if (-not $idle) { throw 'EXE never reached input-idle state' }
+            if ($p.MainWindowHandle -eq 0) { throw 'No main window handle after startup' }
+            if ($p.MainWindowTitle -ne 'TEST BÁN ĐỒ • DROP SLEEP') { throw "Unexpected main window title: $($p.MainWindowTitle)" }
+            Write-Host "STARTUP PASS HWND=$($p.MainWindowHandle) TITLE=$($p.MainWindowTitle)"
+          }
+          finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+      - name: Verify no fixed Sleep
+        shell: pwsh
+        run: |
+          $files = @(
+            Get-ChildItem src/controller_chunks -File
+            Get-ChildItem src/bridge_chunks -File | Where-Object { $_.Name -match '^bridge_(0[1-9]|1[0-3])\.txt$' }
+            Get-Item src/protocol.h
+            Get-Item src/internal_ui_click_logic.h
+          )
+          $hits = $files | Select-String -Pattern '\bSleep\s*\('
+          if ($hits) { $hits | ForEach-Object { Write-Host $_ }; throw 'Sleep() found in source' }
