@@ -10,7 +10,7 @@
         Finish(cancel_?L"ĐÃ HỦY":L"DONE • TEST BÁN ĐỒ hoàn tất");}
     void Finish(const std::wstring&s){running_=false;cancel_=false;PostMessageW(hwnd_,WM_APP+10,0,reinterpret_cast<LPARAM>(new std::wstring(s)));}
     void Start(){if(running_)return;GameClient g{};if(!SelectedGame(g)){Status(L"Không có client được chọn");return;}const bool internal=IsDlgButtonChecked(hwnd_,IDC_MODE_INTERNAL)==BST_CHECKED;running_=true;cancel_=false;Status(internal?L"Đang TEST • dòng BÁN nội bộ • no fixed Sleep":L"Đang TEST • scan ảnh BÁN • no fixed Sleep");if(worker_.joinable())worker_.join();worker_=std::thread([this,g,internal]{RunTest(g,internal);});}
-    LRESULT Handle(UINT m,WPARAM w,LPARAM l){
+    LRESULT Handle(HWND h,UINT m,WPARAM w,LPARAM l){
         switch(m){
             case WM_COMMAND:{
                 const int id=LOWORD(w);
@@ -28,7 +28,7 @@
             case WM_APP+10:{std::unique_ptr<std::wstring>s(reinterpret_cast<std::wstring*>(l));if(s)Status(*s);RefreshClients();return 0;}
             case WM_DESTROY:cancel_=true;KillTimer(hwnd_,kClientTimer);PostQuitMessage(0);return 0;
         }
-        return DefWindowProcW(hwnd_,m,w,l);
+        return DefWindowProcW(h,m,w,l);
     }
 };
 

@@ -27,7 +27,7 @@ private:
     static constexpr int IDC_UI_DIRECT_BASE=400;
     static constexpr int kUiTargetCount=11;
 
-    static LRESULT CALLBACK WndProc(HWND h,UINT m,WPARAM w,LPARAM l){App*self=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));if(m==WM_NCCREATE){auto*cs=reinterpret_cast<CREATESTRUCTW*>(l);self=static_cast<App*>(cs->lpCreateParams);SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)self);}if(self)return self->Handle(m,w,l);return DefWindowProcW(h,m,w,l);}
+    static LRESULT CALLBACK WndProc(HWND h,UINT m,WPARAM w,LPARAM l){App*self=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));if(m==WM_NCCREATE){auto*cs=reinterpret_cast<CREATESTRUCTW*>(l);self=static_cast<App*>(cs->lpCreateParams);SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)self);}if(self)return self->Handle(h,m,w,l);return DefWindowProcW(h,m,w,l);}
     static const wchar_t* UiTargetLabel(UiTestTarget target){
         switch(target){
             case UiTestTarget::CloseItemPopup:return L"X popup item";
