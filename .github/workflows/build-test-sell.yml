@@ -73,6 +73,8 @@ jobs:
           Copy-Item test_sell.ini source_stage/
           Copy-Item src source_stage/src -Recurse
           Copy-Item tests source_stage/tests -Recurse
+          Get-ChildItem source_stage -Directory -Recurse -Filter '__pycache__' | Remove-Item -Recurse -Force
+          Get-ChildItem source_stage -File -Recurse -Filter '*.pyc' | Remove-Item -Force
           New-Item -ItemType Directory -Force -Path source_stage/.github/workflows | Out-Null
           Copy-Item .github/workflows/build-test-sell.yml source_stage/.github/workflows/
           Compress-Archive -Path source_stage/* -DestinationPath package/ThanLong-Test-UI-DIRECT-3Icons-startup-fixed-source.zip -Force
