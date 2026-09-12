@@ -3,7 +3,7 @@ name: Build TEST BAN DO
 on:
   workflow_dispatch:
   push:
-    branches: [ main, feature/ui-direct-3-icons-correct-base ]
+    branches: [ main ]
 
 jobs:
   build:
