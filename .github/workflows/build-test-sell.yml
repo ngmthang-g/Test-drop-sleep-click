@@ -13,6 +13,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Apply Win32 startup fix
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          p3 = Path('src/controller_chunks/controller_03.txt')
+          s3 = p3.read_text(encoding='utf-8')
+          old3 = 'if(self)return self->Handle(m,w,l);return DefWindowProcW(h,m,w,l);}'
+          new3 = 'if(self)return self->Handle(h,m,w,l);return DefWindowProcW(h,m,w,l);}'
+          if new3 not in s3:
+              if old3 not in s3:
+                  raise SystemExit('WndProc anchor not found')
+              s3 = s3.replace(old3, new3, 1)
+              p3.write_text(s3, encoding='utf-8', newline='\n')
+
+          p4 = Path('src/controller_chunks/controller_04.txt')
+          s4 = p4.read_text(encoding='utf-8')
+          old_sig = 'LRESULT Handle(UINT m,WPARAM w,LPARAM l){'
+          new_sig = 'LRESULT Handle(HWND h,UINT m,WPARAM w,LPARAM l){'
+          if new_sig not in s4:
+              if old_sig not in s4:
+                  raise SystemExit('Handle signature anchor not found')
+              s4 = s4.replace(old_sig, new_sig, 1)
+          old_def = 'return DefWindowProcW(hwnd_,m,w,l);'
+          new_def = 'return DefWindowProcW(h,m,w,l);'
+          if new_def not in s4:
+              if old_def not in s4:
+                  raise SystemExit('DefWindowProc anchor not found')
+              s4 = s4.replace(old_def, new_def, 1)
+          p4.write_text(s4, encoding='utf-8', newline='\n')
+          '@ | python -
       - name: TEST UI DIRECT source contract
         run: |
           python -m pip install pytest
@@ -21,6 +53,23 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build Release
         run: cmake --build build --config Release --parallel
+      - name: Smoke test main window startup
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'build/Release/ThanLongTestSell.exe'
+          $p = Start-Process -FilePath $exe -PassThru
+          try {
+            $idle = $p.WaitForInputIdle(5000)
+            $p.Refresh()
+            if ($p.HasExited) { throw "EXE exited during startup with code $($p.ExitCode)" }
+            if (-not $idle) { throw 'EXE never reached input-idle state' }
+            if ($p.MainWindowHandle -eq 0) { throw 'No main window handle after startup' }
+            if ($p.MainWindowTitle -ne 'TEST BÁN ĐỒ • DROP SLEEP') { throw "Unexpected main window title: $($p.MainWindowTitle)" }
+            Write-Host "STARTUP PASS HWND=$($p.MainWindowHandle) TITLE=$($p.MainWindowTitle)"
+          }
+          finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
       - name: Verify no fixed Sleep in ThanLongTestSell source
         shell: pwsh
         run: |
@@ -47,3 +96,13 @@ jobs:
           name: ThanLong-Test-Sell-NoSleep-UI-Direct-Test
           path: package/*
           if-no-files-found: error
+      - name: Commit startup fix
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/controller_chunks/controller_03.txt src/controller_chunks/controller_04.txt
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "fix: pass live HWND during startup [skip ci]"
+            git push
+          }
