@@ -13,11 +13,13 @@ def test_protocol_exposes_ui_test_targets_and_commands():
     for name in [
         "CloseItemPopup", "CloseBag", "CloseTrade", "TradeConfirm",
         "TradeTabEquip", "ItemPutOn", "TradeLock", "TradeUnlock",
-        "TradeSubmit", "ItemDrop", "ItemSell"
+        "TradeSubmit", "ItemDrop", "ItemSell",
+        "OpenBag", "SwitchToSkills", "SwitchToBagUi"
     ]:
         assert name in text
     assert "ProbeUiTestTarget" in text
     assert "InvokeUiTestTarget" in text
+    assert "AlreadyInState" in text
 
 
 def test_bridge_has_probe_and_invoke_with_fail_closed_selection():
@@ -30,6 +32,22 @@ def test_bridge_has_probe_and_invoke_with_fail_closed_selection():
     assert "Name=" in text and "Text=" in text and "Handler=" in text and "Ancestors=" in text
 
 
+def test_new_icon_targets_use_exact_runtime_fingerprints_and_direction_guard():
+    text = read("src/bridge_chunks/bridge_13.txt")
+    # Exact identities recovered from DATA-222 Interface.unity3d.
+    for token in [
+        "butbag", "butbagclick",
+        "buttonoriginalswitchsite", "buttonoriginalswitchsiteclicked",
+        "togglefirsttab", "togglesecondtab",
+        "get_Selected", "ReadSkillBarSwitchState",
+        "AlreadyInState", "không callback để tránh toggle ngược",
+    ]:
+        assert token in text
+    # The two screenshots are two states of one physical switch control.
+    assert "SwitchToSkills" in text
+    assert "SwitchToBagUi" in text
+
+
 def test_controller_has_separate_test_ui_tab_and_all_target_rows():
     text = read("src/controller_chunks/controller_03.txt") + read("src/controller_chunks/controller_04.txt")
     assert "TEST UI DIRECT" in text
@@ -37,12 +55,14 @@ def test_controller_has_separate_test_ui_tab_and_all_target_rows():
     for label in [
         "X popup item", "X Tay nải", "X Giao dịch", "Xác nhận giao dịch",
         "Tab Trang bị", "Đặt lên", "Khóa", "Bỏ khóa", "Giao dịch",
-        "Vứt bỏ", "BÁN"
+        "Vứt bỏ", "BÁN", "MỞ TAY NẢI", "CHUYỂN → SKILL", "CHUYỂN → TAY NẢI"
     ]:
         assert label in text
+    assert "kUiTargetCount=14" in text
     assert "NHẬN DIỆN" in text
     assert "TEST DIRECT" in text
     assert "RunUiDirectTest" in text
+    assert "AlreadyInState" in text
 
 
 def test_existing_sell_flow_remains_present():
