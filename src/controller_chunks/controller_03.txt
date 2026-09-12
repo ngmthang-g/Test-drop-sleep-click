@@ -10,7 +10,7 @@ public:
         INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
         WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.lpfnWndProc=WndProc;wc.hInstance=inst;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);wc.lpszClassName=L"ThanLongTestSellWnd";
         RegisterClassExW(&wc);
-        hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,1040,740,nullptr,nullptr,inst,this);
+        hwnd_=CreateWindowExW(0,wc.lpszClassName,kTitle,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,1040,860,nullptr,nullptr,inst,this);
         if(!hwnd_){const DWORD e=GetLastError();wchar_t msg[256]{};swprintf_s(msg,L"Không tạo được cửa sổ. GetLastError=%lu",static_cast<unsigned long>(e));MessageBoxW(nullptr,msg,L"ThanLongTestSell startup error",MB_OK|MB_ICONERROR);return 1;}
         BuildUi();
         // Hiện UI trước mọi scan/config nặng: double-click phải thấy cửa sổ ngay.
@@ -25,7 +25,7 @@ private:
     static constexpr int IDC_TAB=200;
     static constexpr int IDC_UI_PROBE_BASE=300;
     static constexpr int IDC_UI_DIRECT_BASE=400;
-    static constexpr int kUiTargetCount=11;
+    static constexpr int kUiTargetCount=14;
 
     static LRESULT CALLBACK WndProc(HWND h,UINT m,WPARAM w,LPARAM l){App*self=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));if(m==WM_NCCREATE){auto*cs=reinterpret_cast<CREATESTRUCTW*>(l);self=static_cast<App*>(cs->lpCreateParams);SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)self);}if(self)return self->Handle(h,m,w,l);return DefWindowProcW(h,m,w,l);}
     static const wchar_t* UiTargetLabel(UiTestTarget target){
@@ -41,6 +41,9 @@ private:
             case UiTestTarget::TradeSubmit:return L"Giao dịch";
             case UiTestTarget::ItemDrop:return L"Vứt bỏ";
             case UiTestTarget::ItemSell:return L"BÁN";
+            case UiTestTarget::OpenBag:return L"MỞ TAY NẢI";
+            case UiTestTarget::SwitchToSkills:return L"CHUYỂN → SKILL";
+            case UiTestTarget::SwitchToBagUi:return L"CHUYỂN → TAY NẢI";
             default:return L"UNKNOWN";
         }
     }
@@ -54,7 +57,7 @@ private:
         auto mk=[&](const wchar_t*cls,const wchar_t*txt,DWORD st,int x,int y,int w,int h,int id){HWND z=CreateWindowExW(0,cls,txt,WS_CHILD|WS_VISIBLE|st,x,y,w,h,hwnd_,(HMENU)(INT_PTR)id,inst_,nullptr);if(z)SendMessageW(z,WM_SETFONT,(WPARAM)f,TRUE);return z;};
         mk(L"STATIC",L"CLIENT (tự quét GameAssembly.dll):",SS_LEFT,16,14,300,22,0);
         clients_=mk(L"LISTBOX",L"",WS_BORDER|WS_VSCROLL|LBS_NOTIFY,16,38,1000,126,IDC_CLIENTS);
-        tab_=mk(WC_TABCONTROLW,L"",WS_CLIPSIBLINGS|WS_TABSTOP,16,174,1000,332,IDC_TAB);
+        tab_=mk(WC_TABCONTROLW,L"",WS_CLIPSIBLINGS|WS_TABSTOP,16,174,1000,420,IDC_TAB);
         TCITEMW ti{};ti.mask=TCIF_TEXT;ti.pszText=const_cast<wchar_t*>(L"TEST BÁN ĐỒ");TabCtrl_InsertItem(tab_,0,&ti);ti.pszText=const_cast<wchar_t*>(L"TEST UI DIRECT");TabCtrl_InsertItem(tab_,1,&ti);
         sellPageControls_.push_back(mk(L"BUTTON",L"1. SCAN ẢNH BÁN",BS_AUTORADIOBUTTON|WS_GROUP,38,218,180,26,IDC_MODE_IMAGE));
         sellPageControls_.push_back(mk(L"BUTTON",L"2. DÒNG BÁN NỘI BỘ",BS_AUTORADIOBUTTON,238,218,220,26,IDC_MODE_INTERNAL));
@@ -66,8 +69,8 @@ private:
             uiTestControls_.push_back(mk(L"BUTTON",L"NHẬN DIỆN",BS_PUSHBUTTON,300,y,150,23,IDC_UI_PROBE_BASE+i));
             uiTestControls_.push_back(mk(L"BUTTON",L"TEST DIRECT",BS_PUSHBUTTON,462,y,150,23,IDC_UI_DIRECT_BASE+i));
         }
-        status_=mk(L"STATIC",L"Sẵn sàng",SS_LEFT|SS_CENTERIMAGE|WS_BORDER,16,516,1000,34,IDC_STATUS);
-        log_=mk(L"EDIT",L"",WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY,16,560,1000,132,IDC_LOG);
+        status_=mk(L"STATIC",L"Sẵn sàng",SS_LEFT|SS_CENTERIMAGE|WS_BORDER,16,606,1000,34,IDC_STATUS);
+        log_=mk(L"EDIT",L"",WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY,16,650,1000,150,IDC_LOG);
         TabCtrl_SetCurSel(tab_,0);ShowPage(0);
     }
     void RunUiDirectTest(UiTestTarget target,bool invoke){
@@ -76,7 +79,11 @@ private:
         BridgeClient b;std::wstring err;if(!b.Attach(g,err)){Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" FAIL • "+err);Status(L"UI TEST FAIL");return;}
         Response r{};const Command cmd=invoke?Command::InvokeUiTestTarget:Command::ProbeUiTestTarget;
         if(!b.Call(cmd,static_cast<int>(target),0,0,r,err,1400)){Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" FAIL • "+err);Status(L"UI TEST FAIL");return;}
-        std::wstring state=r.value0?(invoke&&r.resultCode==static_cast<std::int32_t>(ActionResult::ActionInvoked)?L"DIRECT INVOKED":L"FOUND"):L"NOT FOUND";
+        std::wstring state;
+        if(!r.value0)state=L"NOT FOUND";
+        else if(r.resultCode==static_cast<std::int32_t>(ActionResult::AlreadyInState))state=L"ALREADY IN STATE";
+        else if(invoke&&r.resultCode==static_cast<std::int32_t>(ActionResult::ActionInvoked))state=L"DIRECT INVOKED";
+        else state=L"FOUND";
         Log(std::wstring(invoke?L"TEST DIRECT ":L"NHẬN DIỆN ")+UiTargetLabel(target)+L" • "+state+L" • candidates="+std::to_wstring(r.value1)+L" • "+r.detail);
         Status(std::wstring(L"TEST UI • ")+UiTargetLabel(target)+L" • "+state);
     }

@@ -6,7 +6,7 @@
 namespace cleanroute {
 
 constexpr std::uint32_t kMagic = 0x54534253u; // TSBS
-constexpr std::uint32_t kProtocolVersion = 0x00010002u;
+constexpr std::uint32_t kProtocolVersion = 0x00010003u;
 constexpr UINT kWakeMessage = WM_APP + 0x531;
 constexpr wchar_t kMappingPrefix[] = L"Local\\ThanLongTestSell_";
 
@@ -34,11 +34,15 @@ enum class UiTestTarget : std::int32_t {
     TradeSubmit = 9,
     ItemDrop = 10,
     ItemSell = 11,
+    OpenBag = 12,
+    SwitchToSkills = 13,
+    SwitchToBagUi = 14,
 };
 
 enum class ActionResult : std::int32_t {
     None = 0,
     ActionInvoked = 1,
+    AlreadyInState = 2,
 };
 
 // ProbeTradeState resultCode bit flags. The only primary lifecycle signal is
