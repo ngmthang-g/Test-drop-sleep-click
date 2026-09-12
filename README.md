@@ -36,8 +36,18 @@ Các target hiện có:
 9. Giao dịch
 10. Vứt bỏ
 11. BÁN
+12. MỞ TAY NẢI
+13. CHUYỂN → SKILL
+14. CHUYỂN → TAY NẢI
 
-Selector ưu tiên context/hierarchy + Name/Handler; Text chỉ là tín hiệu nhận diện bổ sung. Nếu hai candidate cùng mức tin cậy, tool **fail-closed** và không callback.
+Ba target mới được thêm **trực tiếp trên nền startup-fixed của repo này**, không dùng source của repo probe khác:
+
+- `MỞ TAY NẢI`: ưu tiên exact runtime identity `ButBag / ButBagClick`, có fallback caption `Túi đồ` trong HUD context.
+- Hai icon kiếm/ô vuông là hai trạng thái của cùng control `ButtonOriginalSwitchSite / ButtonOriginalSwitchSiteClicked`.
+- Hai dòng switch đọc `ToggleFirstTab / ToggleSecondTab` bằng `get_Selected` trước khi callback. Nếu đã ở đúng giao diện, tool trả `ALREADY IN STATE` và **không callback**, tránh toggle ngược.
+- Nếu không đọc được state của switch thì direct action fail-closed; nhận diện vẫn có thể báo fingerprint của button để tiếp tục debug runtime.
+
+Selector cũ vẫn ưu tiên context/hierarchy + Name/Handler; Text chỉ là tín hiệu nhận diện bổ sung. Nếu hai candidate cùng mức tin cậy, tool **fail-closed** và không callback.
 
 ## DROP SLEEP
 
@@ -63,6 +73,6 @@ Mode mặc định. Bridge ưu tiên control `BÁN` thuộc popup item, loại s
 
 ## Trạng thái build
 
-Tab TEST UI DIRECT đã qua source-contract và Windows MSVC x64 build trong GitHub Actions run `34635684854`. **Runtime nhận diện/direct vẫn cần test trên client thật**; build pass không được coi là runtime pass.
+Nền startup-fixed đã có smoke regression cho main window. Bản mở rộng 3 icon phải qua lại source-contract, Windows MSVC x64 build, startup smoke và guard no-`Sleep()` trước khi được coi là build PASS. Runtime của 3 target mới chỉ được nâng sau live test trên client thật.
 
 Xem thêm: [VERSION_REPORT.md](VERSION_REPORT.md)
