@@ -224,6 +224,235 @@ void AppendFingerprint(const UiControl& c, wchar_t* detail, std::size_t cap) {
     Append(detail, cap, L" • Ancestors="); Append(detail, cap, c.labels.ancestors.c_str());
 }
 
+void AppendAscii(wchar_t* detail, std::size_t cap, const char* text) {
+    if (!text || !*text) return;
+    wchar_t buffer[96]{};
+    std::size_t i = 0;
+    for (; text[i] && i + 1 < _countof(buffer); ++i)
+        buffer[i] = static_cast<unsigned char>(text[i]);
+    buffer[i] = 0;
+    Append(detail, cap, buffer);
+}
+
+void AppendSwitchRuntimeDiagnostics(std::vector<UiControl>& active,
+                                    wchar_t* detail, std::size_t cap) {
+    std::vector<std::size_t> hints;
+    for (std::size_t i = 0; i < active.size() && hints.size() < 3; ++i) {
+        UiControl& c = active[i];
+        const std::wstring key = FoldKey(c.labels.name + c.labels.text + c.tag +
+                                         c.labels.ancestors + c.labels.descendants);
+        if (HasAny(key, {L"skill", L"switch", L"tab", L"site", L"buttonoriginal"}))
+            hints.push_back(i);
+    }
+    Append(detail, cap, L" • activeObjects=");
+    AppendInt(detail, cap, static_cast<int>(active.size()));
+    Append(detail, cap, L" • hints=");
+    AppendInt(detail, cap, static_cast<int>(hints.size()));
+    for (std::size_t index : hints) {
+        UiControl& c = active[index];
+        std::wstring handler;
+        if (!ReadUiString(c.object, c.klass, "ClickHandler", handler))
+            (void)ReadUiString(c.object, c.klass, "PointerClickHandler", handler);
+        Append(detail, cap, L" • [Class=");
+        AppendAscii(detail, cap, g_api.class_get_name ? g_api.class_get_name(c.klass) : nullptr);
+        Append(detail, cap, L" Name="); Append(detail, cap, c.labels.name.c_str());
+        Append(detail, cap, L" Handler="); Append(detail, cap, handler.c_str());
+        Append(detail, cap, L" Ancestors="); Append(detail, cap, c.labels.ancestors.c_str());
+        Append(detail, cap, L"]");
+    }
+}
+
+bool BuildCallableControlNoInteractable(Il2CppObject* object, Il2CppClass* klass,
+                                        UiControl& output) {
+    if (!object || !klass) return false;
+    UiKind kind{};
+    if (!ClassifyControl(klass, kind)) return false;
+
+    bool callable = false;
+    if (kind == UiKind::Button) {
+        callable = ExactMethod(klass, "HandleClickEvent", 0, false) != nullptr;
+    } else if (kind == UiKind::Rect) {
+        std::wstring handler;
+        callable = ReadUiString(object, klass, "PointerClickHandler", handler) && !handler.empty();
+    } else {
+        // The physical skillbar switch is a click surface, not a state toggle.
+        return false;
+    }
+    if (!callable) return false;
+
+    const MethodInfo* activeGetter = FindMethod(klass, "get_ActiveInHierarchy", 0);
+    if (activeGetter) {
+        std::int32_t active = 0;
+        wchar_t ignored[128]{};
+        if (ScalarGetter(klass, "get_ActiveInHierarchy", object, active, ignored, _countof(ignored)) && !active)
+            return false;
+    }
+
+    output = {};
+    output.object = object;
+    output.klass = klass;
+    output.kind = kind;
+    (void)ReadUiString(object, klass, "Name", output.labels.name);
+    (void)ReadUiString(object, klass, "Text", output.labels.text);
+    (void)ReadUiString(object, klass, "Tag", output.tag);
+    if (!ReadUiString(object, klass, "ClickHandler", output.labels.handler))
+        (void)ReadUiString(object, klass, "PointerClickHandler", output.labels.handler);
+    (void)ReadAncestors(output);
+    CollectDescendantLabels(output);
+    return true;
+}
+
+bool PromoteActiveUiToCallable(const UiControl& source, UiControl& promoted) {
+    Il2CppObject* current = source.object;
+    std::vector<Il2CppObject*> seen;
+    for (int depth = 0; depth < 16 && current; ++depth) {
+        if (std::find(seen.begin(), seen.end(), current) != seen.end()) break;
+        seen.push_back(current);
+        Il2CppClass* klass = nullptr;
+        if (!ReadLocal(current, 0, klass) || !klass) break;
+        if (BuildCallableControlNoInteractable(current, klass, promoted)) return true;
+        Il2CppObject* parent = nullptr;
+        if (!ObjectGetter(current, klass, "get_Parent", parent) || !parent) break;
+        current = parent;
+    }
+    return false;
+}
+
+bool PromoteActiveUiToToggle(const UiControl& source, UiControl& promoted) {
+    Il2CppObject* current = source.object;
+    std::vector<Il2CppObject*> seen;
+    for (int depth = 0; depth < 16 && current; ++depth) {
+        if (std::find(seen.begin(), seen.end(), current) != seen.end()) break;
+        seen.push_back(current);
+        Il2CppClass* klass = nullptr;
+        if (!ReadLocal(current, 0, klass) || !klass) break;
+        UiKind kind{};
+        const bool classifiedToggle = ClassifyControl(klass, kind) && kind == UiKind::Toggle;
+        const bool hasSelected = FindMethod(klass, "get_Selected", 0) != nullptr;
+        if (classifiedToggle || hasSelected) {
+            promoted = {};
+            promoted.object = current;
+            promoted.klass = klass;
+            promoted.kind = UiKind::Toggle;
+            (void)ReadUiString(current, klass, "Name", promoted.labels.name);
+            (void)ReadUiString(current, klass, "Text", promoted.labels.text);
+            (void)ReadUiString(current, klass, "Tag", promoted.tag);
+            (void)ReadAncestors(promoted);
+            return true;
+        }
+        Il2CppObject* parent = nullptr;
+        if (!ObjectGetter(current, klass, "get_Parent", parent) || !parent) break;
+        current = parent;
+    }
+    return false;
+}
+
+bool ReadSkillBarSwitchStateLive(SkillBarSwitchState& state,
+                                 wchar_t* detail, std::size_t cap) {
+    state = SkillBarSwitchState::Unknown;
+    std::vector<UiControl> active;
+    if (!EnumerateActiveUiObjects(active, detail, cap)) return false;
+
+    std::vector<UiControl> first;
+    std::vector<UiControl> second;
+    auto addUnique = [](std::vector<UiControl>& list, UiControl&& value) {
+        for (const UiControl& existing : list)
+            if (existing.object == value.object) return;
+        list.push_back(std::move(value));
+    };
+
+    for (UiControl& row : active) {
+        const std::wstring name = FoldKey(row.labels.name);
+        if (name != L"togglefirsttab" && name != L"togglesecondtab") continue;
+        UiControl toggle{};
+        if (!PromoteActiveUiToToggle(row, toggle)) continue;
+        if (name == L"togglefirsttab") addUnique(first, std::move(toggle));
+        else addUnique(second, std::move(toggle));
+    }
+
+    if (first.size() != 1 || second.size() != 1) {
+        SetText(detail, cap, L"SWITCH STATE UNKNOWN • live scan cần đúng 1 ToggleFirstTab + 1 ToggleSecondTab; không callback");
+        AppendSwitchRuntimeDiagnostics(active, detail, cap);
+        return false;
+    }
+
+    std::int32_t firstSelected = 0, secondSelected = 0;
+    wchar_t ignored[128]{};
+    if (!ScalarGetter(first[0].klass, "get_Selected", first[0].object, firstSelected, ignored, _countof(ignored)) ||
+        !ScalarGetter(second[0].klass, "get_Selected", second[0].object, secondSelected, ignored, _countof(ignored))) {
+        SetText(detail, cap, L"SWITCH STATE UNKNOWN • live toggle không đọc được get_Selected; không callback");
+        AppendSwitchRuntimeDiagnostics(active, detail, cap);
+        return false;
+    }
+    if ((firstSelected != 0) == (secondSelected != 0)) {
+        SetText(detail, cap, L"SWITCH STATE UNKNOWN • live toggle có Selected không hợp lệ; không callback");
+        AppendSwitchRuntimeDiagnostics(active, detail, cap);
+        return false;
+    }
+    state = firstSelected ? SkillBarSwitchState::BagUi : SkillBarSwitchState::Skills;
+    return true;
+}
+
+bool FindSwitchTargetFromActiveUi(UiTestTarget target,
+                                  std::vector<UiControl>& controls,
+                                  std::size_t& selectedIndex,
+                                  int& candidateCount,
+                                  int& selectedScore,
+                                  bool& found,
+                                  wchar_t* detail, std::size_t cap) {
+    std::vector<UiControl> active;
+    if (!EnumerateActiveUiObjects(active, detail, cap)) return false;
+
+    struct Candidate { UiControl control{}; int score = 0; };
+    std::vector<Candidate> candidates;
+    for (UiControl& row : active) {
+        const int score = UiTestScore(target, row);
+        if (score <= 0) continue;
+        UiControl promoted{};
+        if (!PromoteActiveUiToCallable(row, promoted)) continue;
+        bool merged = false;
+        for (Candidate& existing : candidates) {
+            if (existing.control.object == promoted.object) {
+                if (score > existing.score) existing.score = score;
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) candidates.push_back({std::move(promoted), score});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        if (a.score != b.score) return a.score > b.score;
+        return reinterpret_cast<std::uintptr_t>(a.control.object) <
+               reinterpret_cast<std::uintptr_t>(b.control.object);
+    });
+
+    candidateCount = static_cast<int>(candidates.size());
+    if (candidates.empty()) {
+        SetText(detail, cap, UiTestTargetName(target));
+        Append(detail, cap, L" • NOT FOUND • wide runtime fallback");
+        AppendSwitchRuntimeDiagnostics(active, detail, cap);
+        return true;
+    }
+    if (candidates.size() > 1 && candidates[0].score == candidates[1].score &&
+        candidates[0].control.object != candidates[1].control.object) {
+        SetText(detail, cap, UiTestTargetName(target));
+        Append(detail, cap, L" • AMBIGUOUS • wide runtime fallback • candidates=");
+        AppendInt(detail, cap, candidateCount);
+        Append(detail, cap, L" • topScore="); AppendInt(detail, cap, candidates[0].score);
+        AppendSwitchRuntimeDiagnostics(active, detail, cap);
+        return false;
+    }
+
+    controls.clear();
+    controls.reserve(candidates.size());
+    for (Candidate& candidate : candidates) controls.push_back(std::move(candidate.control));
+    selectedIndex = 0;
+    selectedScore = candidates[0].score;
+    found = true;
+    return true;
+}
+
 bool FindUiTestTarget(UiTestTarget target, std::vector<UiControl>& controls, std::size_t& selectedIndex,
                       int& candidateCount, int& selectedScore, bool& found,
                       wchar_t* detail, std::size_t cap) {
@@ -243,6 +472,10 @@ bool FindUiTestTarget(UiTestTarget target, std::vector<UiControl>& controls, std
         return reinterpret_cast<std::uintptr_t>(controls[a.index].object) < reinterpret_cast<std::uintptr_t>(controls[b.index].object);
     });
     candidateCount = static_cast<int>(candidates.size());
+    if (candidates.empty() && IsSkillBarSwitchTarget(target)) {
+        return FindSwitchTargetFromActiveUi(target, controls, selectedIndex, candidateCount,
+                                            selectedScore, found, detail, cap);
+    }
     if (candidates.empty()) {
         SetText(detail, cap, UiTestTargetName(target)); Append(detail, cap, L" • NOT FOUND"); return true;
     }
@@ -267,8 +500,8 @@ bool ProbeUiTestTarget(UiTestTarget target, Response& response, wchar_t* detail,
     Append(detail, cap, L" • score="); AppendInt(detail, cap, score); AppendFingerprint(controls[index], detail, cap);
     if (IsSkillBarSwitchTarget(target)) {
         SkillBarSwitchState state{};
-        wchar_t stateDetail[256]{};
-        if (!ReadSkillBarSwitchState(controls, state, stateDetail, _countof(stateDetail))) {
+        wchar_t stateDetail[512]{};
+        if (!ReadSkillBarSwitchStateLive(state, stateDetail, _countof(stateDetail))) {
             Append(detail, cap, L" • "); Append(detail, cap, stateDetail);
             return true; // Recognition succeeded; direction state is diagnostic here.
         }
@@ -289,7 +522,7 @@ bool InvokeUiTestTarget(UiTestTarget target, Response& response, wchar_t* detail
 
     SkillBarSwitchState beforeState = SkillBarSwitchState::Unknown;
     if (IsSkillBarSwitchTarget(target)) {
-        if (!ReadSkillBarSwitchState(controls, beforeState, detail, cap)) return false;
+        if (!ReadSkillBarSwitchStateLive(beforeState, detail, cap)) return false;
         response.value64_1 = static_cast<std::int64_t>(beforeState);
         if (TargetAlreadyInState(target, beforeState)) {
             response.resultCode = static_cast<std::int32_t>(ActionResult::AlreadyInState);

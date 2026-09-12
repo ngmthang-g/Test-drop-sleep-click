@@ -48,6 +48,24 @@ def test_new_icon_targets_use_exact_runtime_fingerprints_and_direction_guard():
     assert "SwitchToBagUi" in text
 
 
+def test_switch_targets_fallback_to_wide_runtime_scan_and_promote_callable_parent():
+    text = read("src/bridge_chunks/bridge_13.txt")
+    for token in [
+        "EnumerateActiveUiObjects",
+        "PromoteActiveUiToCallable",
+        "FindSwitchTargetFromActiveUi",
+        "ReadSkillBarSwitchStateLive",
+        "activeObjects=",
+        "hints=",
+    ]:
+        assert token in text
+    # Narrow callable scan remains first; wide scan is a switch-target-only fallback.
+    assert "if (!EnumerateControls(controls, detail, cap)) return false;" in text
+    assert "if (IsSkillBarSwitchTarget(target)" in text
+    # Live state detection must not depend on the narrow EnumerateControls toggle list.
+    assert "ReadSkillBarSwitchStateLive" in text
+
+
 def test_controller_has_separate_test_ui_tab_and_all_target_rows():
     text = read("src/controller_chunks/controller_03.txt") + read("src/controller_chunks/controller_04.txt")
     assert "TEST UI DIRECT" in text
